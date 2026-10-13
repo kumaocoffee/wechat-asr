@@ -1,0 +1,26 @@
+name: Windows tests
+
+on:
+  push:
+    branches: [main, developing]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  contract-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test API contract and audio validation
+        run: python -m unittest discover -s tests -p test_*.py -v
+      - name: Check source compilation
+        run: python -m compileall -q backend.py server.py doctor.py example_openai.py tests
