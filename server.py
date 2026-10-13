@@ -1,4 +1,4 @@
-"""OpenAI-compatible local audio transcription server backed by logged-in Weixin."""
+"""Local ASR bridge backed by a logged-in Weixin client."""
 import argparse
 import hmac
 import os
@@ -19,7 +19,7 @@ from backend import BackendError, MAX_BYTES, WechatBackend
 
 MODELS = ('wechat-voice', 'whisper-1')
 MODEL_CREATED = int(time.time())
-app = FastAPI(title='WeChat OpenAI Audio API', version='1.0.0')
+app = FastAPI(title='WeChat ASR Bridge', version='1.0.0')
 backend = WechatBackend()
 gate = anyio.Semaphore(1)
 

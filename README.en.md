@@ -1,6 +1,6 @@
-# WeChat OpenAI Bridge
+# WeChat ASR Bridge
 
-An experimental Windows bridge exposing the speech recognition used by Weixin's chat input as an OpenAI-compatible transcription API. [中文说明](README.md)
+An experimental Windows ASR bridge exposing the speech recognition used by Weixin's chat input as a programmable audio transcription API. [中文说明](README.md)
 
 The actual backend is the user's logged-in Weixin client and Weixin's recognition service. Audio is sent through Weixin, **not to OpenAI**. `whisper-1` is a compatibility alias, not an actual Whisper model.
 
@@ -11,8 +11,8 @@ Windows x64, Miniconda/Anaconda, Python 3.11 x64, and a logged-in **Weixin 4.1.1
 ## Quick start
 
 ```powershell
-git clone https://github.com/kuxiaowo/wechat-openai-bridge.git
-cd wechat-openai-bridge
+git clone https://github.com/kuxiaowo/wechat-asr-bridge.git
+cd wechat-asr-bridge
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 # Log in to Weixin manually.
 .\env\python.exe .\doctor.py

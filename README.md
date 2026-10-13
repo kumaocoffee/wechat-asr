@@ -1,6 +1,6 @@
-# WeChat OpenAI Bridge
+# WeChat ASR Bridge
 
-把 Windows 微信聊天框的语音识别能力包装成 OpenAI 兼容的音频转写 API。
+把 Windows 微信聊天框的语音识别能力提供为可编程的 ASR（自动语音识别）接口。
 
 支持 OpenAI Python SDK、WAV/MP3 输入、JSON/纯文本输出。识别请求由**已登录的微信客户端发送到微信的服务端**；音频不会发送到 OpenAI。`whisper-1` 是客户端兼容别名，后端实际使用微信。
 
@@ -26,8 +26,8 @@
 在 Miniconda/Anaconda Prompt 或已能使用 `conda` 的 PowerShell 中：
 
 ```powershell
-git clone https://github.com/kuxiaowo/wechat-openai-bridge.git
-cd wechat-openai-bridge
+git clone https://github.com/kuxiaowo/wechat-asr-bridge.git
+cd wechat-asr-bridge
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
