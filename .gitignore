@@ -1,0 +1,11 @@
+env/
+.runtime/
+__pycache__/
+*.py[cod]
+*.log
+*.pid
+.env
+.env.*
+api-verification.json
+latest-server-verification.json
+.pytest_cache/
