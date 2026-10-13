@@ -1,8 +1,11 @@
 """Run with the OpenAI Python SDK; no OpenAI account or real OpenAI API key needed."""
 import argparse
 import os
+import sys
 from pathlib import Path
 from openai import OpenAI
+
+sys.stdout.reconfigure(encoding='utf-8')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('file', type=Path, nargs='?', default=Path(__file__).parent / 'tests' / 'fixtures' / 'test.wav')
