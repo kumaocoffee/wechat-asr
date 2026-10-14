@@ -179,6 +179,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 
 该脚本检查每次转写结果及 `agent_generation` 是否保持一致，报告写入 `.runtime/stability-verification.json`。服务停止过程可用 `tests/verify_shutdown.py --port 8765` 验证，此命令会正常停止被测试的后台实例。
 
+回调入口在脚本卸载和宿主意外结束后是否仍有效，可独立验证：
+
+```powershell
+.\env\python.exe tests\verify_callback_disconnect.py
+```
+
+该测试只注入和结束自己创建的测试子进程，不操作微信；确认 Frida DLL 已卸载后再次调用原生回调入口，报告写入 `.runtime/crash-analysis/fix-callback-disconnect-verification.json`。它不能代替真实微信长期运行与异步对象清理验证。
+
 开发提交先进入 `developing` 分支，再通过 PR 合并到 `main`。
 
 构建免安装窗口版：
@@ -187,6 +195,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-输出为 `dist/WeChatASRBridge-0.2.0-windows-x64-portable.zip` 和 `SHA256SUMS.txt`。构建使用 PyInstaller 文件夹模式，将窗口、API 服务、原生 agent 和 FFmpeg 打包在一起；不会包含微信程序、账号数据或 `.runtime/`。GitHub Actions 的 `Windows portable release` 工作流也可构建并上传 ZIP。
+输出为 `dist/WeChatASRBridge-0.2.2-windows-x64-portable.zip` 和 `SHA256SUMS.txt`。构建使用 PyInstaller 文件夹模式，将窗口、API 服务、原生 agent 和 FFmpeg 打包在一起；不会包含微信程序、账号数据或 `.runtime/`。GitHub Actions 的 `Windows portable release` 工作流也可构建并上传 ZIP。
 
 协议格式参考：[OpenAI 官方 Create transcription 文档](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)。项目代码采用 [MIT](LICENSE) 许可；第三方依赖和微信客户端保留各自的许可证及条款。

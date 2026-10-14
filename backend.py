@@ -112,6 +112,39 @@ class WechatBackend:
         self._script = None
         self._pid = None
         self._generation = 0
+        self._unsafe_pid = None
+        self._expected_detach = False
+
+    def _agent_message(self, pid, generation, message, data):
+        if message.get('type') == 'error':
+            log.error('Native agent script error: pid=%s generation=%s description=%s file=%s line=%s',
+                      pid, generation, message.get('description'), message.get('fileName'), message.get('lineNumber'))
+            return
+        payload = message.get('payload')
+        if message.get('type') != 'send' or not isinstance(payload, dict):
+            return
+        event = payload.get('event')
+        if event in ('native_draining', 'native_drained', 'session_created', 'request_submitted'):
+            # Never log server_response/final_result payloads or transcription text.
+            fields = {key: payload[key] for key in ('id', 'references', 'elapsed_ms', 'frames', 'packets') if key in payload}
+            log.info('Native lifecycle: pid=%s generation=%s event=%s fields=%s', pid, generation, event, fields)
+        elif event in ('callback_error', 'response_inspect_error', 'native_cleanup_failed'):
+            log.error('Native inspection error: pid=%s generation=%s event=%s error=%s',
+                      pid, generation, event, payload.get('error'))
+
+    def _agent_detached(self, session, pid, generation, reason, crash=None):
+        # Frida delivers this on its signal thread. Acquiring the ownership
+        # lock here can deadlock detach(), which is called under that lock and
+        # may wait for signal delivery. Set the quarantine marker first; RPC
+        # callers perform their usual locked unwind and notify waiters.
+        expected = self._session is session and self._expected_detach
+        log.log(logging.INFO if expected else logging.WARNING,
+                'Native agent detached: pid=%s generation=%s reason=%s expected=%s crash=%s',
+                pid, generation, reason, expected, getattr(crash, 'summary', None))
+        if self._session is session and not expected and reason not in ('process-terminated', 'process-replaced'):
+            self._unsafe_pid = pid
+            self.healthy = False
+            self.last_error = 'agent_disconnected'
 
     def verify_dll(self, path):
         try:
@@ -126,10 +159,14 @@ class WechatBackend:
             raise BackendError('无法读取微信 DLL，请检查安装路径。')
 
     def _ensure_agent(self, pid):
+        if pid == self._unsafe_pid:
+            raise BackendError('原生 agent 意外断开，暂停此微信进程的调用；请退出微信后重新登录。', code='agent_disconnected')
         if self._session is not None and not self._session.is_detached and self._pid == pid:
             return self._script
         self._close_agent()
         session = frida.attach(pid)
+        generation = self._generation + 1
+        session.on('detached', lambda reason, crash=None: self._agent_detached(session, pid, generation, reason, crash))
         script = None
         try:
             # Verify the actual loaded DLL before installing native hooks.
@@ -140,6 +177,7 @@ class WechatBackend:
             finally:
                 metadata.unload()
             script = session.create_script((ROOT / 'agent.js').read_text(encoding='utf-8-sig'))
+            script.on('message', lambda message, data: self._agent_message(pid, generation, message, data))
             script.load()
         except Exception:
             if script:
@@ -157,14 +195,18 @@ class WechatBackend:
         if session is None:
             return
         if not session.is_detached:
-            # A native cleanup failure must never unload live JS callbacks.
+            # Uncertain native ownership must retain objects and their hooks.
             result = script.exports_sync.dispose()
             if not result.get('cleaned'):
                 self.healthy = False
                 self.last_error = 'cleanup_failed'
                 raise BackendError('微信会话尚未安全清理，保留 agent 并暂停调用。', code='cleanup_failed')
-            script.unload()
-            session.detach()
+            self._expected_detach = True
+            try:
+                script.unload()
+                session.detach()
+            finally:
+                self._expected_detach = False
         log.info('Native agent closed: pid=%s generation=%s', self._pid, self._generation)
         self._session = self._script = self._pid = None
 
@@ -208,6 +250,12 @@ class WechatBackend:
                     self.lock.wait()
                 if self._closing:
                     raise BackendError('服务正在停止。', code='server_stopping')
+                if pid == self._unsafe_pid:
+                    raise BackendError('原生 agent 意外断开，暂停此微信进程的调用；请退出微信后重新登录。', code='agent_disconnected')
+                if self._unsafe_pid is not None and pid != self._unsafe_pid:
+                    self._unsafe_pid = None
+                    self.healthy = True
+                    self.last_error = None
                 if not self.healthy and self._session is not None and self._session.is_detached:
                     self._close_agent()
                     self.healthy = True
@@ -235,9 +283,11 @@ class WechatBackend:
                         self.last_error = 'cleanup_failed'
                     self._active_requests -= 1
                     if self._active_requests == 0 and session.is_detached:
-                        # A terminated target owns no live native allocations.
+                        # Only process termination guarantees its native objects
+                        # disappeared; unexpected disconnects quarantine that PID.
                         self._close_agent()
-                        self.healthy = True
+                        if self._unsafe_pid != pid:
+                            self.healthy = True
                     self.lock.notify_all()
         if not cleanup.get('cleaned'):
             raise BackendError('微信会话清理失败，已暂停后续调用。', 503, 'cleanup_failed')

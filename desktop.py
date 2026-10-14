@@ -267,6 +267,7 @@ class DesktopApplication:
             if failed:
                 error = str(current.get('last_error') or '服务状态异常，请查看日志。')
                 friendly = {'cleanup_failed': '会话清理未完成，请退出微信后重新登录。',
+                            'agent_disconnected': '微信连接已中断，请退出微信后重新登录。',
                             'recognition_timeout': '上次识别超时，可重试或查看日志。',
                             'recognition_failed': '微信识别未成功，可重试或查看日志。'}
                 message = friendly.get(error, error)

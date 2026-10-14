@@ -54,28 +54,38 @@ let inFlight=0;
 let cleanupFailed=false;
 let disposing=false;
 let disposed=false;
-// Keep callback addresses stable across requests. Never release them after
-// every recognition while Weixin may still have native work in flight.
+let dispatching=false;
+// Native objects must never contain pointers into a disposable JS runtime.
+// VirtualAlloc and the Weixin allocator are process-owned, unlike Memory.alloc
+// and NativeCallback. Keep this tiny fallback table/page until Weixin exits so
+// host termination and automatic Frida unload leave callable native no-ops.
+const kernel32=Process.getModuleByName('kernel32.dll');
+const virtualAlloc=new NativeFunction(kernel32.getExportByName('VirtualAlloc'),'pointer',['pointer','uint64','uint32','uint32'],{abi:'win64'});
+const callbackCode=virtualAlloc(ptr(0),4096,0x3000,0x04);
+if(callbackCode.isNull())throw Error('Cannot allocate native callback fallbacks');
+callbackCode.writeByteArray(new Uint8Array(64).fill(0x90));
+for(const offset of [0,16,32])callbackCode.add(offset).writeByteArray([0x31,0xc0,0x90,0x90,0x90,0xc3]);
+if(!Memory.protect(callbackCode,4096,'r-x'))throw Error('Cannot protect native callback fallbacks');
 const callbackVtable=alloc(64);
 callbackVtable.writeByteArray(base.add(0x9854c28).readByteArray(64));
 function acceptsCallback(self){const context=sessions.get(self.toString());return context&&!context.closing?context:null;}
-const resultCb=new NativeCallback((self,text,seq,a,b,finish)=>{
- const context=acceptsCallback(self);if(!context)return;
- try{context.events.push({event:'recognition',text:textOf(text),seq,a,b,finish});}
+const resultHook=Interceptor.attach(callbackCode,{onEnter(args){
+ const context=acceptsCallback(args[0]);if(disposed||!context)return;
+ try{context.events.push({event:'recognition',text:textOf(args[1]),seq:args[2].toInt32(),a:args[3].toInt32(),b:args[4].toInt32(),finish:args[5].toInt32()&0xff});}
  catch(e){send({event:'callback_error',error:String(e)});}
-},'void',['pointer','pointer','int','int','int','uint8'],'win64');
-const errorCb=new NativeCallback((self,flag,code,detail)=>{
- const context=acceptsCallback(self);if(!context)return;
- context.events.push({event:'recognition_error',flag,code,detail});context.done=true;
-},'void',['pointer','uint8','int','int'],'win64');
-const noopCb=new NativeCallback(()=>{},'void',['pointer'],'win64');
-callbackVtable.add(8).writePointer(resultCb);callbackVtable.add(16).writePointer(errorCb);callbackVtable.add(24).writePointer(noopCb);
+}});
+const errorHook=Interceptor.attach(callbackCode.add(16),{onEnter(args){
+ const context=acceptsCallback(args[0]);if(disposed||!context)return;
+ context.events.push({event:'recognition_error',flag:args[1].toInt32()&0xff,code:args[2].toInt32(),detail:args[3].toInt32()});context.done=true;
+}});
+callbackVtable.add(8).writePointer(callbackCode);callbackVtable.add(16).writePointer(callbackCode.add(16));callbackVtable.add(24).writePointer(callbackCode.add(32));
 const coroutineHook=Interceptor.attach(base.add(0x462b70),{onLeave(ret){
- if(disposed||!pending.length)return;
+ if(disposed||dispatching||!pending.length)return;
  try{if(ret.isNull()||ret.readPointer().isNull())return;}catch(_){return;}
  const job=pending.shift();clearTimeout(job.timer);
  send({event:'coroutine_dispatch',tid:Process.getCurrentThreadId()});
- try{job.action();job.resolve();}catch(e){job.reject(e);}
+ dispatching=true;
+ try{job.action();job.resolve();}catch(e){job.reject(e);}finally{dispatching=false;}
 }});
 const responseHook=Interceptor.attach(base.add(0x6905510),{onEnter(args){
  const context=acceptsCallback(args[0]);if(disposed||!context)return;
@@ -94,10 +104,35 @@ async function onCoroutine(action){
  });
 }
 function destroySession(p){
- const strategy=p.add(8).readPointer();
- if(strategy.readPointer().equals(base.add(0x991de58)))strategy.add(0x50).readPointer().writeU8(1);
  p.writePointer(base.add(0x9854c28));
  native(0x6903d90,'void',['pointer'])(p);free(p);
+}
+function nativeTaskReferences(context){
+ if(!context.stopControl||context.stopControl.isNull())throw Error('Missing native cancellation ownership');
+ const refs=context.stopControl.add(8).readS32();
+ if(refs<1)throw Error('Invalid native cancellation reference count');
+ return refs;
+}
+async function drainNativeTasks(context){
+ // The verified iLink strategy owns one cancellation shared_ptr. Each queued
+ // native response closure copies it; destruction releases those references.
+ // Stop first to unregister the network callback and prevent new producers.
+ await onCoroutine(()=>{
+  if(!context.strategy.readPointer().equals(base.add(0x991de58)))throw Error('Unsupported native cancellation strategy');
+  context.stopControl=context.strategy.add(0x58).readPointer();
+  nativeTaskReferences(context);
+  native(0x6ea1fe0,'void',['pointer'])(context.strategy);
+  context.nativeStopped=true;
+ });
+ const started=Date.now();
+ let refs=nativeTaskReferences(context);
+ send({event:'native_draining',id:context.id,references:refs});
+ while(refs!==1){
+  if(Date.now()-started>=30000)throw Error('Native tasks did not release cancellation ownership within 30 seconds');
+  await new Promise(resolve=>setTimeout(resolve,50));
+  refs=nativeTaskReferences(context);
+ }
+ send({event:'native_drained',id:context.id,references:refs,elapsed_ms:Date.now()-started});
 }
 function textOf(p){const s=readString(p);return p.add(24).readU64().toNumber()<16?p.readUtf8String(s.length):p.readPointer().readUtf8String(s.length);}
 function createSession(context,scene,codec){
@@ -125,12 +160,15 @@ async function finalizeRequest(context){
   try{
    if(context.session){
     if(!context.constructed)throw Error('Native constructor did not complete; retain agent');
-    if(context.strategy.readPointer().equals(base.add(0x991de58)))context.strategy.add(0x50).readPointer().writeU8(1);
-    await onCoroutine(()=>{context.cleanupStarted=true;destroySession(context.session);});
+    await drainNativeTasks(context);
+    await onCoroutine(()=>{
+     if(nativeTaskReferences(context)!==1)throw Error('Native task ownership changed before destruction');
+     context.cleanupStarted=true;destroySession(context.session);
+    });
     sessions.delete(context.session.toString());
    }
    requests.delete(context.id);context.keep.length=0;return {cleaned:true};
-  }catch(e){cleanupFailed=true;return {cleaned:false,cancelled:true,error:String(e)};}
+  }catch(e){cleanupFailed=true;send({event:'native_cleanup_failed',id:context.id,error:String(e)});return {cleaned:false,cancelled:true,error:String(e)};}
  })();
  return context.cleanupPromise;
 }
@@ -158,9 +196,8 @@ rpc.exports={
   disposing=true;
   const result=await rpc.exports.finalize();if(!result.cleaned)return result;
   disposed=true;
-  coroutineHook.detach();responseHook.detach();Interceptor.flush();
-  free(callbackVtable);
-  return {cleaned:true,hooksDetached:true};
+  coroutineHook.detach();responseHook.detach();resultHook.detach();errorHook.detach();Interceptor.flush();
+  return {cleaned:true,hooksDetached:true,nativeFallbacksRetained:true};
  },
  async recognize(pcm,id,scene=36,codec=5){
   if(disposed||disposing)throw Error('Agent is stopping');
@@ -196,7 +233,6 @@ rpc.exports={
     await new Promise(resolve=>setTimeout(resolve,100));
    }
    const snapshot={...created,bytes:enc.data.length,frames:enc.frames,done:context.done,events:context.events};
-   await new Promise(resolve=>setTimeout(resolve,1000));
    const cleanup=await finalizeRequest(context);snapshot.cleaned=cleanup.cleaned;return snapshot;
   }finally{
    context.running=false;
