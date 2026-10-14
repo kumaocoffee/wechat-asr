@@ -12,31 +12,12 @@ import urllib.request
 import uuid
 
 from app_paths import resource_dir, runtime_dir
+from desktop_settings import saved_port, save_port, saved_api_key, save_settings
 
 APP_BACKEND = 'wechat-4.1.13.65'
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 MAX_UPLOAD = 25 * 1024 * 1024
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-
-
-def saved_port(runtime=None):
-    root = Path(runtime) if runtime is not None else runtime_dir()
-    try:
-        value = json.loads((root / 'desktop-settings.json').read_text(encoding='utf-8'))['port']
-        if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65535:
-            return value
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
-    return 8765
-
-
-def save_port(port, runtime=None):
-    root = Path(runtime) if runtime is not None else runtime_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    target = root / 'desktop-settings.json'
-    temporary = target.with_suffix('.' + uuid.uuid4().hex + '.tmp')
-    temporary.write_text(json.dumps({'port': int(port)}), encoding='utf-8')
-    temporary.replace(target)
 
 
 def health(port, timeout=2):
@@ -113,7 +94,7 @@ class ServiceController:
             return (executable_matches and '--serve' in command and '--shutdown-file' in command
                     and metadata['shutdown_file'] in command)
 
-    def start(self):
+    def start(self, api_key=None):
         with self._lock:
             current = health(self.port)
             if current:
@@ -125,9 +106,16 @@ class ServiceController:
             if not self.frozen:
                 command.append(str(resource_dir() / 'desktop.py'))
             command += ['--serve', '--port', str(self.port), '--shutdown-file', str(signal)]
+            environment = os.environ.copy()
+            if api_key is not None:
+                if api_key:
+                    environment['WECHAT_API_KEY'] = api_key
+                else:
+                    environment.pop('WECHAT_API_KEY', None)
             with self.log_path.open('a', encoding='utf-8') as log:
                 self._process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log,
-                                                 stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+                                                 stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
+                                                 env=environment)
             metadata = {'pid': self._process.pid, 'port': self.port, 'shutdown_file': str(signal),
                         'executable': str(self.executable.resolve()), 'version': VERSION}
             temporary = self.metadata_path.with_suffix('.' + uuid.uuid4().hex + '.tmp')

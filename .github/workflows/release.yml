@@ -43,6 +43,15 @@ jobs:
           if ($taskProcess.ExitCode -ne 0) { throw 'Packaged runtime test failed' }
           $taskResult = Get-Content -LiteralPath $taskReport -Raw | ConvertFrom-Json
           if (-not $taskResult.passed -or -not $taskResult.frozen) { throw 'Invalid packaged runtime result' }
+      - name: Packaged tray and service lifecycle test
+        shell: pwsh
+        run: |
+          $taskApp = Join-Path $PWD 'dist/WeChatASRBridge/WeChatASRBridge.exe'
+          $taskReport = Join-Path $PWD 'dist/packaged-lifecycle.json'
+          $taskProcess = Start-Process -FilePath $taskApp -ArgumentList @('--self-test-lifecycle', '--output', ('"' + $taskReport + '"')) -WindowStyle Hidden -PassThru -Wait
+          if ($taskProcess.ExitCode -ne 0) { throw 'Packaged lifecycle test failed' }
+          $taskResult = Get-Content -LiteralPath $taskReport -Raw | ConvertFrom-Json
+          if (-not $taskResult.passed -or -not $taskResult.frozen) { throw 'Invalid packaged lifecycle result' }
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64-portable

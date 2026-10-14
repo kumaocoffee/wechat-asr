@@ -6,7 +6,7 @@ The actual backend is the user's logged-in Weixin client and Weixin's recognitio
 
 ## Portable Windows app
 
-[Download the portable ZIP from Releases](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest), extract the entire folder, and run `WeChatASRBridge.exe`. No Python, conda or FFmpeg installation is needed. Log in to the supported Weixin client, start the service, and select an audio file or connect Screenpipe. The app provides status, four concurrent recognition slots, sample audio, result copying/saving, connection settings and logs. Closing the window leaves its service running in the background.
+[Download the portable ZIP from Releases](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest), extract the entire folder, and run `WeChatASRBridge.exe`. No Python, conda or FFmpeg installation is needed. Log in to the supported Weixin client, start the service, and select an audio file or connect Screenpipe. The app provides status, four concurrent recognition slots, sample audio, result copying/saving, connection settings and logs. The port and API key persist, with the key encrypted using Windows DPAPI for the current user. Closing the window hides it to the system tray and keeps the service running. Use the tray menu to restore the window or exit and gracefully stop services managed by the app.
 
 See [portable usage](docs/PORTABLE.md). Keep the `_internal` folder alongside the executable. Build from source with `build.ps1`; GitHub Actions can build the same portable artifact.
 
