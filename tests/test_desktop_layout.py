@@ -31,9 +31,17 @@ class DesktopLayoutTests(unittest.TestCase):
                     app._update_buttons()
                     root.update_idletasks()
                     width,height=root.minsize()
-                    root.geometry(f'{width}x{height}')
-                    root.update_idletasks()
-                    inspect_layout(app)
+                    left=app.settings_button.master.master
+                    link_row=next(child for child in left.winfo_children()
+                                  if any(isinstance(button,app.ttk.Button) and button.cget('text')=='复制 SDK 地址'
+                                         for button in child.winfo_children()))
+                    for window_width,window_height in ((width,height),(max(width,1080),height+300)):
+                        root.geometry(f'{window_width}x{window_height}')
+                        root.update_idletasks()
+                        inspect_layout(app)
+                        gap=app.settings_button.winfo_rooty()-(link_row.winfo_rooty()+link_row.winfo_height())
+                        self.assertGreaterEqual(gap,0)
+                        self.assertLessEqual(gap,24,'The lower two button rows spread apart when the window grows')
                     app.closed=True
                 finally:
                     for timer in root.tk.call('after','info'):
