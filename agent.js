@@ -26,21 +26,60 @@ function encode(pcm){
  destroyString(out.add(8));native(0x615fa60,'pointer',['pointer','int'])(encoder,1);
  return {data,frames,failed};
 }
+function opusPackets(bytes,frames){
+ // Verified native format: a 16-byte header, then uint16-LE length + Opus frame.
+ const magic='#!OPUS_RAW_V1';
+ if(bytes.length<16||!Array.from(magic,(c,i)=>bytes[i]===c.charCodeAt(0)).every(Boolean))throw Error('Unexpected Opus header');
+ const bounds=[16];let pos=16;
+ while(pos<bytes.length){
+  if(pos+2>bytes.length)throw Error('Incomplete Opus frame length');
+  const n=bytes[pos]|(bytes[pos+1]<<8);pos+=2+n;
+  if(!n||pos>bytes.length)throw Error('Incomplete Opus frame');
+  bounds.push(pos);
+ }
+ if(bounds.length-1!==frames)throw Error('Opus frame count mismatch');
+ const packets=[];
+ // 250 frames = 5 seconds per packet. Preserve encoder state and all audio.
+ // The header belongs to the stream and is included only in the first packet.
+ for(let f=0;f<frames;f+=250){
+  const end=Math.min(f+250,frames);
+  packets.push(bytes.slice(f===0?0:bounds[f],bounds[end]));
+ }
+ return packets;
+}
 let active=null;
 let pending=null;
+let disposed=false;
+// Keep callback addresses stable across requests. Never release them after
+// every recognition while Weixin may still have native work in flight.
+const callbackVtable=alloc(64);
+callbackVtable.writeByteArray(base.add(0x9854c28).readByteArray(64));
+function acceptsCallback(self){return active&&!active.closing&&self.equals(active.session);}
+const resultCb=new NativeCallback((self,text,seq,a,b,finish)=>{
+ if(!acceptsCallback(self))return;
+ try{const event={event:'recognition',text:textOf(text),seq,a,b,finish};active.events.push(event);if(finish)active.done=true;}
+ catch(e){send({event:'callback_error',error:String(e)});}
+},'void',['pointer','pointer','int','int','int','uint8'],'win64');
+const errorCb=new NativeCallback((self,flag,code,detail)=>{
+ if(!acceptsCallback(self))return;
+ active.events.push({event:'recognition_error',flag,code,detail});active.done=true;
+},'void',['pointer','uint8','int','int'],'win64');
+const noopCb=new NativeCallback(()=>{},'void',['pointer'],'win64');
+callbackVtable.add(8).writePointer(resultCb);callbackVtable.add(16).writePointer(errorCb);callbackVtable.add(24).writePointer(noopCb);
 const coroutineHook=Interceptor.attach(base.add(0x462b70),{onLeave(ret){
- if(!pending)return;
+ if(disposed||!pending)return;
  try{if(ret.isNull()||ret.readPointer().isNull())return;}catch(_){return;}
  const action=pending;pending=null;
  send({event:'coroutine_dispatch',tid:Process.getCurrentThreadId()});
  try{action();}catch(e){active.events.push({event:'dispatch_error',error:String(e),pc:e.context?.pc?.sub(base).toString()});active.done=true;send(active.events[active.events.length-1]);}
 }});
 const responseHook=Interceptor.attach(base.add(0x6905510),{onEnter(args){
- if(!active||!args[0].equals(active.session))return;
+ if(disposed||!active||active.closing||!args[0].equals(active.session))return;
  const p=args[1];
  try{const event={event:'server_response',error:p.readU8(),finish:p.add(1).readU8(),seq:p.add(4).readS32(),text:textOf(p.add(8))};active.events.push(event);send(event);}catch(e){send({event:'response_inspect_error',error:String(e)});}
 }});
 async function onCoroutine(action){
+ if(disposed)throw Error('Agent is disposed');
  let done=false,error=null;
  pending=()=>{try{action();}catch(e){error=String(e);}finally{done=true;}};
  for(let i=0;i<300&&!done;i++)await new Promise(resolve=>setTimeout(resolve,100));
@@ -61,18 +100,23 @@ function createSession(id,scene,codec){
  assignString(key,Array.from(id,c=>c.charCodeAt(0)));
  native(0x69031c0,'pointer',['pointer','int','pointer','pointer','int','pointer'])(session,Date.now()%0x7fffffff,key,cfg,scene,opts);
  destroyString(key);
- const vtable=alloc(64);vtable.writeByteArray(base.add(0x9854c28).readByteArray(64));
- const resultCb=new NativeCallback((self,text,seq,a,b,finish)=>{
-  try {const event={event:'recognition',text:textOf(text),seq,a,b,finish};active.events.push(event);send(event);if(finish)active.done=true;}
-  catch(e){send({event:'callback_error',error:String(e)});}
- },'void',['pointer','pointer','int','int','int','uint8'],'win64');
- const errorCb=new NativeCallback((self,flag,code,detail)=>{const event={event:'recognition_error',flag,code,detail};active.events.push(event);send(event);active.done=true;},'void',['pointer','uint8','int','int'],'win64');
- const noopCb=new NativeCallback(()=>{},'void',['pointer'],'win64');
- vtable.add(8).writePointer(resultCb);vtable.add(16).writePointer(errorCb);vtable.add(24).writePointer(noopCb);
- session.writePointer(vtable);keep.push(vtable,resultCb,errorCb,noopCb,cfg,opts);
+ session.writePointer(callbackVtable);keep.push(cfg,opts);
  const strategy=session.add(8).readPointer();
- active={session,strategy,vtable,events:[],done:false,id};
+ active={session,strategy,events:[],done:false,id,closing:false,cleanupStarted:false};
  return {session:session.toString(),strategy:strategy.toString(),strategyVtable:strategy.readPointer().sub(base).toString(),id,scene,codec};
+}
+async function finalizeActive(){
+ pending=null;
+ if(!active){keep.length=0;return {cleaned:true};}
+ const a=active;
+ if(a.cleanupStarted)return {cleaned:false,error:'Previous native destruction failed; do not retry or unload callbacks'};
+ a.closing=true;
+ try{
+  // Ignore late callbacks before cancellation or destruction begins.
+  if(a.strategy.readPointer().equals(base.add(0x991de58)))a.strategy.add(0x50).readPointer().writeU8(1);
+  await onCoroutine(()=>{a.cleanupStarted=true;destroySession(a.session);});
+  active=null;keep.length=0;return {cleaned:true};
+ }catch(e){return {cleaned:false,cancelled:true,error:String(e)};}
 }
 rpc.exports={
  info(){return {pid:Process.id,base:base.toString(),path:mod.path,size:mod.size,arch:Process.arch};},
@@ -83,38 +127,42 @@ rpc.exports={
  encode(pcm){return encode(pcm);},
  state(address){const p=ptr(address);return {final:p.add(0xc7).readU8(),stopping:p.add(0xc5).readU8(),text:textOf(p.add(0xc8)),seq:p.add(0x110).readS32(),extra:textOf(p.add(0xf0))};},
  async cleanup(addresses){await onCoroutine(()=>{for(const address of addresses)destroySession(ptr(address));});return {cleaned:addresses.length};},
- async finalize(){
-  pending=null;if(!active)return {cleaned:true};
-  const a=active;
-  // Prevent any late iLink response from reaching JavaScript callbacks.
-  if(a.strategy.readPointer().equals(base.add(0x991de58)))a.strategy.add(0x50).readPointer().writeU8(1);
-  for(const offset of [8,16,24])a.vtable.add(offset).writePointer(base.add(0x83375));
-  try{await onCoroutine(()=>{destroySession(a.session);free(a.vtable);});active=null;return {cleaned:true};}
-  catch(e){return {cleaned:false,cancelled:true,error:String(e),note:'Native allocations retained until Weixin exits; callbacks replaced with a native return stub'};}
+ async finalize(){return finalizeActive();},
+ async dispose(){
+  if(disposed)return {cleaned:true};
+  const result=await finalizeActive();if(!result.cleaned)return result;
+  disposed=true;pending=null;
+  coroutineHook.detach();responseHook.detach();Interceptor.flush();
+  free(callbackVtable);
+  return {cleaned:true,hooksDetached:true};
  },
  create(id,scene,codec){return createSession(id,scene,codec);},
  async recognize(pcm,id,scene=36,codec=5){
+  if(disposed)throw Error('Agent is disposed');
   if(active)throw Error('Only one session per agent instance');
   const enc=encode(pcm);if(enc.failed||!enc.data.length)throw Error('encoding failed');
+  const packets=opusPackets(enc.data.bytes,enc.frames);
   let created;
   send({event:'waiting_for_coroutine',timeout_seconds:30});
   await onCoroutine(()=>{
    const cfg=rpc.exports.config();
    if(cfg.voice_input_ilink!==1||cfg.voice_input_opus!==1)throw Error('This PoC requires a logged-in client with iLink and Opus enabled');
    created=createSession(id,scene,codec);send({event:'session_created',...created});
-   const audio=emptyString();assignString(audio,enc.data.bytes);
    const method=active.strategy.readPointer().add(8).readPointer();
-   try{new NativeFunction(method,'void',['pointer','pointer','int','uint8','int'],{abi:'win64',exceptions:'steal'})(active.strategy,audio,1,1,codec);}
-   finally{destroyString(audio);}
-   send({event:'request_submitted',bytes:enc.data.length,frames:enc.frames});
+   const submit=new NativeFunction(method,'void',['pointer','pointer','int','uint8','int'],{abi:'win64',exceptions:'steal'});
+   for(let i=0;i<packets.length;i++){
+    const audio=emptyString();assignString(audio,packets[i]);
+    try{submit(active.strategy,audio,i+1,i===packets.length-1?1:0,codec);}
+    finally{destroyString(audio);}
+   }
+   send({event:'request_submitted',bytes:enc.data.length,frames:enc.frames,packets:packets.length});
   });
   for(let i=0;i<600&&!active.done;i++){await new Promise(resolve=>setTimeout(resolve,100));if(active.session.add(0xc7).readU8()){const event={event:'final_result',text:textOf(active.session.add(0xc8)),a:active.session.add(0xe8).readS32(),b:active.session.add(0xec).readS32()};active.events.push(event);send(event);active.done=true;}}
   const snapshot={...created,bytes:enc.data.length,frames:enc.frames,done:active.done,events:active.events};
   pending=null;
   await new Promise(resolve=>setTimeout(resolve,1000));
-  await onCoroutine(()=>{destroySession(active.session);free(active.vtable);});
-  active=null;
-  snapshot.cleaned=true;
+  const cleanup=await finalizeActive();
+  snapshot.cleaned=cleanup.cleaned;
   return snapshot;
  }
 };
