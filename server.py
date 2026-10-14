@@ -22,7 +22,8 @@ MODELS = ('wechat-voice', 'whisper-1')
 MODEL_CREATED = int(time.time())
 app = FastAPI(title='WeChat ASR Bridge', version='1.0.0')
 backend = WechatBackend()
-gate = anyio.Semaphore(1)
+MAX_CONCURRENCY = 4
+gate = anyio.Semaphore(MAX_CONCURRENCY)
 
 
 def error_response(message, status=400, code='invalid_request', param=None):
@@ -84,7 +85,9 @@ async def model(name: str):
 @app.get('/health')
 async def health():
     # Read-only; does not inject or submit an audio request.
-    return {'status': 'ok' if backend.healthy else 'degraded', 'busy': gate.value == 0,
+    return {'status': 'ok' if backend.healthy else 'degraded', 'busy': gate.value < MAX_CONCURRENCY,
+            'active_requests': MAX_CONCURRENCY - gate.value, 'max_concurrency': MAX_CONCURRENCY,
+            'queued_requests': gate.statistics().tasks_waiting,
             'last_pid': backend.last_pid, 'last_success': backend.last_success,
             'agent_connected': backend.agent_connected,
             'agent_generation': backend.agent_generation,
@@ -139,10 +142,6 @@ async def transcriptions(request: Request):
         data = await audio.read(MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
             return error_response('音频文件超过 25 MiB。', 413, 'file_too_large', 'file')
-        if gate.value == 0:
-            response = error_response('微信正在处理另一个音频请求，请稍后重试。', 429, 'server_busy')
-            response.headers['retry-after'] = '3'
-            return response
         async with gate:
             with anyio.CancelScope(shield=True):
                 result = await anyio.to_thread.run_sync(backend.transcribe, data, abandon_on_cancel=False)
@@ -164,7 +163,8 @@ if __name__ == '__main__':
         os.environ['WECHAT_PID'] = str(args.pid)
     if args.host not in ('127.0.0.1', 'localhost', '::1') and not os.environ.get('WECHAT_API_KEY'):
         parser.error('非本机监听地址需要先设置 WECHAT_API_KEY。')
-    # One worker only: the native bridge must not run concurrently across processes.
+    # Concurrent requests share one agent; separate workers cannot coordinate
+    # native callback ownership or graceful shutdown in the same Weixin process.
     runtime = Path(__file__).parent / '.runtime'
     if args.shutdown_file and not args.shutdown_file.resolve().is_relative_to(runtime.resolve()):
         parser.error('--shutdown-file 必须位于项目 .runtime 目录内。')

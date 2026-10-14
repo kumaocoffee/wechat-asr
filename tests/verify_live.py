@@ -1,4 +1,4 @@
-"""Live SDK integration, conversion and concurrent-admission verification."""
+"""Live SDK integration, conversion and concurrent recognition verification."""
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 import json
@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import threading
 
 import httpx
 import imageio_ffmpeg
@@ -46,26 +47,38 @@ except APIStatusError as error:
     assert error.status_code == 400 and error.body['param'] == 'stream'
     checks.append({'check': 'sdk_error', 'status': error.status_code, 'body': error.body})
 
-def call():
-    with (FIXTURES / 'test.wav').open('rb') as audio:
-        return client.audio.transcriptions.create(model='whisper-1', file=audio).text
-
-with ThreadPoolExecutor(max_workers=1) as executor:
-    running = executor.submit(call)
-    for _ in range(100):
-        if httpx.get(HEALTH_URL, timeout=5).json()['busy']:
-            break
-        time.sleep(0.03)
-    else:
-        raise AssertionError('Did not observe in-flight transcription')
-    with (FIXTURES / 'test-second.wav').open('rb') as audio:
-        refused = httpx.post(URL + '/audio/transcriptions', data={'model': 'whisper-1'},
-                             files={'file': ('test.wav', audio, 'audio/wav')},
-                             headers={'Authorization': 'Bearer ' + API_KEY}, timeout=10)
-    assert refused.status_code == 429 and refused.json()['error']['code'] == 'server_busy'
-    assert running.result(timeout=150) == first.text
-    checks.append({'check': 'serial_native_calls', 'overlap_status': refused.status_code,
-                   'completed_text': first.text})
+for concurrency in (2, 4, 8):
+    barrier = threading.Barrier(concurrency)
+    def call(index):
+        name = 'test.wav' if index % 2 == 0 else 'test-second.wav'
+        expected = first.text if index % 2 == 0 else second
+        with (FIXTURES / name).open('rb') as audio:
+            barrier.wait(timeout=10)
+            started = time.monotonic()
+            response = client.audio.transcriptions.with_raw_response.create(model='whisper-1', file=audio)
+            text = response.parse().text
+            assert text == expected, (index, name, text)
+            assert response.headers.get('x-wechat-session-cleaned') == 'true'
+            return {'index': index, 'status': response.status_code, 'text': text,
+                    'elapsed_seconds': round(time.monotonic() - started, 3)}
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(call, index) for index in range(concurrency)]
+        observations = []
+        while not all(future.done() for future in futures):
+            snapshot = httpx.get(HEALTH_URL, timeout=5).json()
+            observations.append({'active': snapshot['active_requests'], 'queued': snapshot['queued_requests']})
+            time.sleep(0.03)
+        results = [future.result(timeout=150) for future in futures]
+    peak_active = max((item['active'] for item in observations), default=0)
+    peak_queued = max((item['queued'] for item in observations), default=0)
+    assert peak_active == min(concurrency, 4), observations
+    if concurrency > 4:
+        assert peak_queued > 0, observations
+    check = {'check': 'concurrent_recognition', 'concurrency': concurrency, 'peak_active': peak_active,
+             'peak_queued': peak_queued, 'elapsed_seconds': round(time.monotonic() - started, 3), 'results': results}
+    checks.append(check)
+    print(json.dumps(check, ensure_ascii=False), flush=True)
 
 health = httpx.get(HEALTH_URL).json()
 assert not health['busy'] and health['status'] == 'ok'
