@@ -195,6 +195,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-输出为 `dist/WeChatASRBridge-0.2.2-windows-x64-portable.zip` 和 `SHA256SUMS.txt`。构建使用 PyInstaller 文件夹模式，将窗口、API 服务、原生 agent 和 FFmpeg 打包在一起；不会包含微信程序、账号数据或 `.runtime/`。GitHub Actions 的 `Windows portable release` 工作流也可构建并上传 ZIP。
+输出为 `dist/WeChatASRBridge-0.2.3-windows-x64-portable.zip` 和 `SHA256SUMS.txt`。构建使用 PyInstaller 文件夹模式，将窗口、API 服务、原生 agent 和 FFmpeg 打包在一起；不会包含微信程序、账号数据或 `.runtime/`。GitHub Actions 的 `Windows portable release` 工作流也可构建并上传 ZIP。
 
 协议格式参考：[OpenAI 官方 Create transcription 文档](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)。项目代码采用 [MIT](LICENSE) 许可；第三方依赖和微信客户端保留各自的许可证及条款。

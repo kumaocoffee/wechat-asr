@@ -113,7 +113,7 @@ class DesktopApplication:
         left = tk.Frame(body, bg=c['paper'], padx=22, pady=18)
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(9, weight=1)
+        left.rowconfigure(8, weight=1)
         right = tk.Frame(body, bg=c['paper'], padx=24, pady=22)
         right.grid(row=0, column=1, sticky='nsew')
         self._label(left, '本机服务', 14, bold=True).grid(row=0, column=0, sticky='w')
@@ -139,7 +139,7 @@ class DesktopApplication:
         self._label(left, '接口地址', 10, bold=True).grid(row=6, column=0, sticky='w')
         self._label(left, '', 10, variable=self.endpoint, mono=True).grid(row=7, column=0, sticky='w', pady=(8, 10))
         links = tk.Frame(left, bg=c['paper'])
-        links.grid(row=8, column=0, sticky='ew')
+        links.grid(row=8, column=0, sticky='sew')
         ttk.Button(links, text='复制 SDK 地址', command=self._copy_endpoint).pack(side='left', padx=(0, 8))
         ttk.Button(links, text='接口文档', command=self._open_docs).pack(side='left')
         self.port_box = None
