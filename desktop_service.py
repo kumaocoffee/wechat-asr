@@ -15,7 +15,7 @@ from app_paths import resource_dir, runtime_dir
 from desktop_settings import saved_port, save_port, saved_api_key, save_settings
 
 APP_BACKEND = 'wechat-4.1.13.65'
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 MAX_UPLOAD = 25 * 1024 * 1024
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 

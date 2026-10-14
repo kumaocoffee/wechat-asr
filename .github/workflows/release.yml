@@ -7,11 +7,13 @@ on:
     paths:
       - 'desktop*.py'
       - 'app_paths.py'
+      - 'agent.js'
       - 'packaging/**'
       - 'backend.py'
       - 'server.py'
       - 'requirements*.txt'
       - 'docs/PORTABLE.md'
+      - 'tests/**'
       - '.github/workflows/release.yml'
   push:
     tags: ['v*']

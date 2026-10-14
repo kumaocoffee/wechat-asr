@@ -17,6 +17,15 @@ if (-not $Background) {
     return
 }
 $taskQuotedArgs = @($taskArgs | ForEach-Object { '"' + $_ + '"' })
+# Start-Process truncates redirected files. Preserve the previous session's
+# evidence before creating new logs, including abnormal service termination.
+$taskLogStamp = Get-Date -Format 'yyyyMMdd-HHmmss-fffffff'
+foreach ($taskLogStream in @('stdout', 'stderr')) {
+    $taskPreviousLog = Join-Path $taskRuntime "server-$Port.$taskLogStream.log"
+    if (Test-Path -LiteralPath $taskPreviousLog) {
+        Copy-Item -LiteralPath $taskPreviousLog -Destination (Join-Path $taskRuntime "server-$Port-$taskLogStamp.$taskLogStream.log")
+    }
+}
 $taskService = Start-Process -FilePath $taskPython -ArgumentList $taskQuotedArgs -WorkingDirectory $taskRoot -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $taskRuntime "server-$Port.stdout.log") -RedirectStandardError (Join-Path $taskRuntime "server-$Port.stderr.log")
 [ordered]@{ pid=$taskService.Id; port=$Port; shutdown_file=$taskSignal; script=(Join-Path $taskRoot 'server.py') } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $taskRuntime "server-$Port.json") -Encoding UTF8
 for ($taskAttempt=0; $taskAttempt -lt 50; $taskAttempt++) {
