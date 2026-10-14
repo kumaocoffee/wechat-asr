@@ -118,7 +118,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 - WAV/MP3 已验证，其他输入格式使用随 Python 依赖提供的 FFmpeg 解码；无需单独安装 FFmpeg。
 - 支持 `json`/`text`。`stream=false`、`temperature=0` 可作为兼容默认参数传入；不控制微信识别模型温度。
 - 暂不支持 `language`、`prompt`、流式输出、逐词时间戳、字幕或说话人分离。未实现参数返回 400，不会假装已经生效。
-- 同时只处理一个识别请求；忙时返回 429 和 `Retry-After: 3`。不要使用多个 Uvicorn worker 或同时运行其他微信插桩程序。
+- 默认支持 **4 路并发识别**，超出的请求等待空闲槽位，不再因另一个请求正在识别而返回 429。各请求有独立原生会话、回调和清理过程；仍使用单个 Uvicorn worker，避免多个进程争用同一微信 agent。
 - 微信不可用返回 503，识别超时返回 504，错误体为 OpenAI 风格的 `error` 对象。
 - 上传音频和文本不会持久保存在项目中。multipart 解析可能使用请求结束后清理的系统临时文件；转换和转写缓冲在内存中处理。
 - 仅实现音频转写与模型列表，不实现聊天、翻译、语音生成或 Realtime API。
@@ -134,7 +134,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 | 503 / 无有效协程 | 确认微信已登录且聊天主窗口正常；部分账号可能未启用 iLink/Opus |
 | 多个微信进程 | 自动发现只选择有聊天主窗口的主进程；必要时指定 PID，不要选择 OCR/播放器子进程 |
 | 端口占用 | 停止原实例，或使用 `-Port 8766` |
-| 429 | 等待当前转写完成，再重试 |
+| 请求排队 | 同时最多识别 4 个请求；客户端超时应包含排队时间 |
 | 健康检查 ok 但转写失败 | `/health` 只表示桥接器状态，需查看错误响应和 `.runtime/` 日志 |
 
 ## 开发与验证
@@ -153,7 +153,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 .\env\python.exe .\tests\verify_live.py --base-url http://127.0.0.1:8766/v1
 ```
 
-后者会把合成测试语音发送给微信识别服务，检查 WAV JSON、MP3 纯文本、SDK 错误解析和并发请求拒绝。报告写入 `.runtime/api-verification.json`，不上传真实机器 PID、路径或运行日志。CI 在 Windows 上只跑无需微信的测试。
+后者会把合成测试语音发送给微信识别服务，检查 WAV JSON、MP3 纯文本、SDK 错误解析，以及 2/4/8 个同时发起的请求是否全部成功、返回各自正确文本。8 请求会验证最多 4 路识别及其余请求排队。请在没有其他客户端请求的独立实例中运行。报告写入 `.runtime/api-verification.json`，不上传真实机器 PID、路径或运行日志。CI 在 Windows 上只跑无需微信的测试。
 
 超过 35 秒的完整转写验证（使用仓库合成语音组成长音频，独立结尾从第 37.68 秒开始）：
 

@@ -8,6 +8,7 @@ import subprocess
 import socket
 import sys
 import time
+import threading
 
 import httpx
 from openai import OpenAI
@@ -21,13 +22,15 @@ def main():
     root = Path(__file__).resolve().parents[1]
     base = f'http://127.0.0.1:{args.port}'
     client = OpenAI(base_url=base + '/v1', api_key=os.getenv('WECHAT_API_KEY', 'wechat-local'), timeout=150, max_retries=0)
+    barrier = threading.Barrier(2)
     def transcribe():
         with (root / 'tests' / 'fixtures' / 'test.wav').open('rb') as audio:
+            barrier.wait(timeout=10)
             return client.audio.transcriptions.create(model='whisper-1', file=audio).text
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        request = executor.submit(transcribe)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        requests = [executor.submit(transcribe) for _ in range(2)]
         for _ in range(100):
-            if httpx.get(base + '/health', timeout=5).json()['busy']:
+            if httpx.get(base + '/health', timeout=5).json()['active_requests'] == 2:
                 break
             time.sleep(0.03)
         else:
@@ -35,9 +38,9 @@ def main():
         stop = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
             str(root / 'stop.ps1'), '-Port', str(args.port)],
             capture_output=True, timeout=180, creationflags=subprocess.CREATE_NO_WINDOW)
-        text = request.result(timeout=150)
+        texts = [request.result(timeout=150) for request in requests]
         assert stop.returncode == 0, stop.stderr.decode('utf-8', errors='replace')
-        assert text == '你好，这是微信语音接口测试，今天阳光很好'
+        assert texts == ['你好，这是微信语音接口测试，今天阳光很好'] * 2
     try:
         connection = socket.create_connection(('127.0.0.1', args.port), timeout=1)
     except OSError:
@@ -46,7 +49,8 @@ def main():
         connection.close()
         raise AssertionError('Server still listening after stop.ps1')
     result = {'passed': True, 'observed_busy': True, 'request_completed': True,
-              'text': text, 'stop_exit_code': stop.returncode, 'server_stopped': True}
+              'texts': texts, 'concurrent_requests_completed': 2,
+              'stop_exit_code': stop.returncode, 'server_stopped': True}
     runtime = root / '.runtime'
     runtime.mkdir(exist_ok=True)
     (runtime / 'shutdown-verification.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

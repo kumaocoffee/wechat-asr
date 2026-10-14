@@ -43,7 +43,7 @@ For background operation use `start.ps1 -Background`; use `stop.ps1` for gracefu
 - `POST /v1/audio/transcriptions`, `GET /v1/models`, and `GET /health`.
 - `json` and `text` responses; WAV and MP3 integration-tested. FFmpeg is bundled through the Python dependency.
 - No bridge-level total duration cap; maximum 25 MiB per upload. Synthetic 75.3-second WAV/MP3 inputs have been verified. Opus frames are submitted as numbered packets in one recognition session, with only the last packet marked final. Limits for longer inputs remain unverified.
-- One native request at a time; concurrent requests receive 429.
+- Up to **four concurrent native recognition sessions**; additional requests wait for a free slot. Each request owns its callbacks and cleanup. Use one Uvicorn worker so all requests share the same process-level agent.
 - One persistent Frida agent per Weixin process, with a separate native voice session per request. Shutdown detaches hooks and unloads the agent. Uncertain cleanup pauses requests and retains callbacks until Weixin exits.
 - No streaming, prompts, language controls, subtitles, timestamps, diarization, chat, TTS or Realtime API. Unsupported parameters are rejected explicitly.
 - A health response does not prove live login or recognition readiness.

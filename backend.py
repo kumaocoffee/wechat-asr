@@ -46,7 +46,7 @@ def discover_pid():
     command = (
         '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; '
         '$taskCandidates=@(Get-Process -Name Weixin -ErrorAction SilentlyContinue | '
-        'Where-Object { $_.MainWindowTitle -eq "微信" -and $_.Responding }); '
+        'Where-Object { $_.MainWindowHandle -ne 0 -and $_.Responding }); '
         'ConvertTo-Json -InputObject @($taskCandidates | ForEach-Object { $_.Id }) -Compress'
     )
     try:
@@ -99,7 +99,9 @@ def normalize_audio(data):
 
 class WechatBackend:
     def __init__(self):
-        self.lock = threading.Lock()
+        self.lock = threading.Condition(threading.RLock())
+        self._active_requests = 0
+        self._closing = False
         self.healthy = True
         self.last_pid = None
         self.last_error = None
@@ -167,6 +169,10 @@ class WechatBackend:
 
     def close(self):
         with self.lock:
+            self._closing = True
+            self.lock.notify_all()
+            while self._active_requests:
+                self.lock.wait()
             self._close_agent()
 
     @property
@@ -178,50 +184,82 @@ class WechatBackend:
         return self._generation
 
     def transcribe(self, data):
-        # Extra process-level protection if this method is used outside FastAPI.
-        with self.lock:
-            if not self.healthy and self._session is not None and self._session.is_detached:
-                self._close_agent()
-                self.healthy = True
-            if not self.healthy:
-                raise BackendError('上次会话清理未完成，暂停调用；请退出微信后重新登录。', code='cleanup_failed')
-            script = None
-            cleanup = {'cleaned': True}
-            result = failure = None
-            try:
-                pcm, duration = normalize_audio(data)
-                pid = discover_pid()
-                script = self._ensure_agent(pid)
-                result = script.exports_sync.recognize(list(pcm), f'api-voice-{uuid.uuid4().hex}', 36, 5)
-            except Exception as error:
-                failure = error
-            finally:
-                if self._session is not None and self._session.is_detached:
-                    # A terminated target owns no live native allocations.
+        # Protect only agent ownership and replacement. RPC calls run outside
+        # this lock so independent native sessions can remain in flight together.
+        request_id = f'api-voice-{uuid.uuid4().hex}'
+        script = session = None
+        registered = False
+        cleanup = {'cleaned': True}
+        result = failure = None
+        try:
+            pcm, duration = normalize_audio(data)
+            with self.lock:
+                # A verified, attached process is stable even when Windows
+                # chooses the picture viewer as its current "main" window.
+                cached_pid = self._pid if self.agent_connected else None
+            pid = discover_pid() if os.environ.get('WECHAT_PID') or cached_pid is None else cached_pid
+            with self.lock:
+                # A changed or detached target cannot replace the agent until
+                # all callers of the previous agent have finished unwinding.
+                while self._active_requests and (self._pid != pid or self._session.is_detached):
+                    if self._closing:
+                        raise BackendError('服务正在停止。', code='server_stopping')
+                    self.lock.wait()
+                if self._closing:
+                    raise BackendError('服务正在停止。', code='server_stopping')
+                if not self.healthy and self._session is not None and self._session.is_detached:
                     self._close_agent()
-                elif script:
+                    self.healthy = True
+                if not self.healthy:
+                    raise BackendError('上次会话清理未完成，暂停调用；请退出微信后重新登录。', code='cleanup_failed')
+                script = self._ensure_agent(pid)
+                session = self._session
+                generation = self._generation
+                self._active_requests += 1
+                registered = True
+            result = script.exports_sync.recognize(list(pcm), request_id, 36, 5)
+        except Exception as error:
+            failure = error
+        finally:
+            if registered:
+                if not session.is_detached:
                     try:
-                        cleanup = script.exports_sync.finalize()
+                        # Never finalize another request's live native session.
+                        cleanup = script.exports_sync.finalize(request_id)
                     except Exception as error:
-                        cleanup = {'cleaned': False, 'error': str(error)}
-            if not cleanup.get('cleaned'):
-                self.healthy = False
-                self.last_error = 'cleanup_failed'
-                raise BackendError('微信会话清理失败，已暂停后续调用。', 503, 'cleanup_failed')
-            if failure:
-                self.last_error = str(failure)
-                if isinstance(failure, BackendError):
-                    raise failure
-                raise BackendError('微信语音服务暂不可用，请确认已登录且 iLink/Opus 已启用。') from failure
-            errors = [e for e in result['events'] if e['event'] in ('recognition_error', 'dispatch_error')]
-            finals = [e for e in result['events'] if e['event'] == 'final_result']
+                        cleanup = {'cleaned': session.is_detached, 'error': str(error)}
+                with self.lock:
+                    if not cleanup.get('cleaned'):
+                        self.healthy = False
+                        self.last_error = 'cleanup_failed'
+                    self._active_requests -= 1
+                    if self._active_requests == 0 and session.is_detached:
+                        # A terminated target owns no live native allocations.
+                        self._close_agent()
+                        self.healthy = True
+                    self.lock.notify_all()
+        if not cleanup.get('cleaned'):
+            raise BackendError('微信会话清理失败，已暂停后续调用。', 503, 'cleanup_failed')
+        if failure:
+            with self.lock:
+                if self.healthy:
+                    self.last_error = str(failure)
+            if isinstance(failure, BackendError):
+                raise failure
+            raise BackendError('微信语音服务暂不可用，请确认已登录且 iLink/Opus 已启用。') from failure
+        errors = [e for e in result['events'] if e['event'] in ('recognition_error', 'dispatch_error')]
+        finals = [e for e in result['events'] if e['event'] == 'final_result']
+        if errors or not result['done'] or not finals:
+            code = 'recognition_failed' if errors else 'recognition_timeout'
+            with self.lock:
+                if self.healthy:
+                    self.last_error = code
             if errors:
-                self.last_error = 'recognition_failed'
-                raise BackendError('微信返回识别错误。', 502, 'recognition_failed')
-            if not result['done'] or not finals:
-                self.last_error = 'recognition_timeout'
-                raise BackendError('微信识别未在时限内完成。', 504, 'recognition_timeout')
-            self.last_error = None
+                raise BackendError('微信返回识别错误。', 502, code)
+            raise BackendError('微信识别未在时限内完成。', 504, code)
+        with self.lock:
+            if self.healthy:
+                self.last_error = None
             self.last_success = time.time()
-            log.info('Native recognition completed: pid=%s generation=%s seconds=%.3f', pid, self._generation, duration)
-            return Transcription(finals[-1]['text'], duration, pid, result['frames'], result['bytes'])
+        log.info('Native recognition completed: pid=%s generation=%s seconds=%.3f', pid, generation, duration)
+        return Transcription(finals[-1]['text'], duration, pid, result['frames'], result['bytes'])
