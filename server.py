@@ -1,6 +1,7 @@
 """Local ASR bridge backed by a logged-in Weixin client."""
 import argparse
 import hmac
+import logging
 import os
 import time
 import uuid
@@ -85,8 +86,10 @@ async def health():
     # Read-only; does not inject or submit an audio request.
     return {'status': 'ok' if backend.healthy else 'degraded', 'busy': gate.value == 0,
             'last_pid': backend.last_pid, 'last_success': backend.last_success,
+            'agent_connected': backend.agent_connected,
+            'agent_generation': backend.agent_generation,
             'backend': 'wechat-4.1.13.65', 'formats': ['json', 'text'],
-            'max_audio_seconds': 15, 'last_error': backend.last_error,
+            'max_audio_seconds': None, 'last_error': backend.last_error,
             'note': '健康检查不等于当前微信登录状态验证'}
 
 
@@ -156,6 +159,7 @@ if __name__ == '__main__':
     parser.add_argument('--pid', type=int, help='Optional fixed Weixin main process PID')
     parser.add_argument('--shutdown-file', type=Path, help='Local graceful shutdown signal file')
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     if args.pid:
         os.environ['WECHAT_PID'] = str(args.pid)
     if args.host not in ('127.0.0.1', 'localhost', '::1') and not os.environ.get('WECHAT_API_KEY'):
@@ -177,3 +181,11 @@ if __name__ == '__main__':
         controller.run()
     finally:
         finished.set()
+        while True:
+            try:
+                backend.close()
+                break
+            except BackendError:
+                logging.exception('Native cleanup is uncertain; retaining the agent until Weixin exits.')
+                while backend.agent_connected:
+                    time.sleep(0.5)

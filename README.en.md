@@ -42,12 +42,17 @@ For background operation use `start.ps1 -Background`; use `stop.ps1` for gracefu
 
 - `POST /v1/audio/transcriptions`, `GET /v1/models`, and `GET /health`.
 - `json` and `text` responses; WAV and MP3 integration-tested. FFmpeg is bundled through the Python dependency.
-- Maximum 15 seconds and 25 MiB per upload. Overlength inputs are rejected, not silently truncated.
+- No bridge-level total duration cap; maximum 25 MiB per upload. Synthetic 75.3-second WAV/MP3 inputs have been verified. Opus frames are submitted as numbered packets in one recognition session, with only the last packet marked final. Limits for longer inputs remain unverified.
 - One native request at a time; concurrent requests receive 429.
+- One persistent Frida agent per Weixin process, with a separate native voice session per request. Shutdown detaches hooks and unloads the agent. Uncertain cleanup pauses requests and retains callbacks until Weixin exits.
 - No streaming, prompts, language controls, subtitles, timestamps, diarization, chat, TTS or Realtime API. Unsupported parameters are rejected explicitly.
 - A health response does not prove live login or recognition readiness.
 - Native instrumentation can affect Weixin stability; this build-specific bridge has not been validated for long-term operation.
 
 Run offline tests with `env\python.exe -m unittest discover -s tests -p "test_*.py" -v`. Live integration uses `env\python.exe tests\verify_live.py` and sends only included synthetic fixtures to Weixin's service.
+
+Run `env\python.exe tests\verify_long.py` to check long WAV/MP3 transcription, including a distinct spoken tail starting after 35 seconds, full decoded duration and native cleanup. See [long-audio findings](docs/LONG_AUDIO.md).
+
+Run `env\python.exe tests\verify_stability.py --port 8765 --requests 20` to verify repeated calls reuse the same agent. Only one server instance may connect to Weixin. `tests\verify_shutdown.py --port 8765` verifies completion of an in-flight request during graceful shutdown and stops that background server.
 
 MIT-licensed bridge code. No proprietary Weixin binaries, account keys, chat databases or personal recordings are distributed. Third-party components keep their own licenses. This project is not affiliated with Tencent, WeChat or OpenAI.

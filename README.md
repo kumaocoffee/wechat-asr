@@ -114,7 +114,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 
 ## 兼容范围与限制
 
-- 单次音频最长 **15 秒**、最大 **25 MiB**。超长会拒绝，不会悄悄只返回前 15 秒。
+- 不设置音频总时长上限，单文件最大 **25 MiB**。已实测 **75.3 秒 WAV/MP3**；原生 Opus 流按帧边界分包，在同一识别会话中递增包序号，仅最后一包标记结束。更长音频的微信服务端限制仍待验证。
 - WAV/MP3 已验证，其他输入格式使用随 Python 依赖提供的 FFmpeg 解码；无需单独安装 FFmpeg。
 - 支持 `json`/`text`。`stream=false`、`temperature=0` 可作为兼容默认参数传入；不控制微信识别模型温度。
 - 暂不支持 `language`、`prompt`、流式输出、逐词时间戳、字幕或说话人分离。未实现参数返回 400，不会假装已经生效。
@@ -122,7 +122,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 - 微信不可用返回 503，识别超时返回 504，错误体为 OpenAI 风格的 `error` 对象。
 - 上传音频和文本不会持久保存在项目中。multipart 解析可能使用请求结束后清理的系统临时文件；转换和转写缓冲在内存中处理。
 - 仅实现音频转写与模型列表，不实现聊天、翻译、语音生成或 Realtime API。
-- 每次调用创建并清理独立 Frida 会话。清理失败会暂停后续调用；需要检查微信状态并重启本服务。
+- 同一微信进程复用常驻 Frida agent，每次调用创建并清理独立原生语音会话；服务停止时统一分离钩子和卸载脚本。清理状态不确定时暂停调用并保留 agent，需退出微信后重新登录。
 
 ## 常见问题
 
@@ -154,6 +154,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 ```
 
 后者会把合成测试语音发送给微信识别服务，检查 WAV JSON、MP3 纯文本、SDK 错误解析和并发请求拒绝。报告写入 `.runtime/api-verification.json`，不上传真实机器 PID、路径或运行日志。CI 在 Windows 上只跑无需微信的测试。
+
+超过 35 秒的完整转写验证（使用仓库合成语音组成长音频，独立结尾从第 37.68 秒开始）：
+
+```powershell
+.\env\python.exe tests\verify_long.py
+```
+
+同时检查 WAV/MP3 的完整时长、结尾文字和会话清理，报告写入 `.runtime/long-verification.json`。移除限制与原生分包的调查记录见 [长音频验证](docs/LONG_AUDIO.md)。
+
+连续调用和崩溃修复验证（必须只有一个服务实例连接微信）：
+
+```powershell
+.\env\python.exe tests\verify_stability.py --port 8765 --requests 20
+```
+
+该脚本检查每次转写结果及 `agent_generation` 是否保持一致，报告写入 `.runtime/stability-verification.json`。服务停止过程可用 `tests/verify_shutdown.py --port 8765` 验证，此命令会正常停止被测试的后台实例。
 
 开发提交先进入 `developing` 分支，再通过 PR 合并到 `main`。
 

@@ -7,6 +7,9 @@ import unittest
 from unittest.mock import patch, MagicMock
 import tempfile
 import wave
+import subprocess
+
+import imageio_ffmpeg
 
 from fastapi.testclient import TestClient
 from backend import BackendError, Transcription, normalize_audio, WechatBackend
@@ -64,10 +67,19 @@ class ApiContractTests(unittest.TestCase):
         out = io.BytesIO()
         with wave.open(out, 'wb') as audio:
             audio.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
-            audio.writeframes(b'\0' * 16 * 32000)
-        with self.assertRaises(BackendError) as error:
-            normalize_audio(out.getvalue())
-        self.assertEqual(error.exception.code, 'audio_too_long')
+            audio.writeframes(b'\x01\x00' * 40 * 16000)
+        pcm, seconds = normalize_audio(out.getvalue())
+        self.assertEqual(seconds, 40)
+        self.assertEqual(pcm, b'\x01\x00' * 40 * 16000)
+        # Exercise the ffmpeg path with an actual compressed long input.
+        compressed = subprocess.run(
+            [imageio_ffmpeg.get_ffmpeg_exe(), '-hide_banner', '-loglevel', 'error',
+             '-i', 'pipe:0', '-f', 'mp3', 'pipe:1'],
+            input=out.getvalue(), capture_output=True, check=True, timeout=20,
+        ).stdout
+        decoded, seconds = normalize_audio(compressed)
+        self.assertGreater(seconds, 39)
+        self.assertGreater(len(decoded), 39 * 32000)
         with self.assertRaises(BackendError):
             normalize_audio(b'not an audio file')
         pcm, seconds = normalize_audio(self.audio)
@@ -94,6 +106,7 @@ class ApiContractTests(unittest.TestCase):
     def test_cleanup_failure_stops_future_native_calls(self):
         bridge = WechatBackend()
         session, metadata, agent = MagicMock(), MagicMock(), MagicMock()
+        session.is_detached = False
         session.create_script.side_effect = [metadata, agent]
         metadata.exports_sync.info.return_value = {'path': 'test.dll'}
         agent.exports_sync.recognize.return_value = {
@@ -109,7 +122,102 @@ class ApiContractTests(unittest.TestCase):
             with self.assertRaises(BackendError):
                 bridge.transcribe(self.audio)
             attach.assert_called_once()
+        session.detach.assert_not_called()
+        agent.unload.assert_not_called()
+        agent.exports_sync.dispose.return_value = {'cleaned': False}
+        with self.assertRaises(BackendError):
+            bridge.close()
+        session.detach.assert_not_called()
+        agent.unload.assert_not_called()
+
+    def test_agent_is_reused_and_closed_only_on_shutdown(self):
+        bridge = WechatBackend()
+        session, metadata, agent = MagicMock(), MagicMock(), MagicMock()
+        session.is_detached = False
+        session.create_script.side_effect = [metadata, agent]
+        metadata.exports_sync.info.return_value = {'path': 'test.dll'}
+        agent.exports_sync.recognize.return_value = {
+            'done': True, 'events': [{'event': 'final_result', 'text': '测试'}],
+            'frames': 1, 'bytes': 20,
+        }
+        agent.exports_sync.finalize.return_value = {'cleaned': True}
+        agent.exports_sync.dispose.return_value = {'cleaned': True}
+        with patch.object(backend, 'discover_pid', return_value=123), patch.object(backend.frida, 'attach', return_value=session) as attach, patch.object(bridge, 'verify_dll'):
+            bridge.transcribe(self.audio)
+            bridge.transcribe(self.audio)
+            attach.assert_called_once_with(123)
+            self.assertEqual(session.create_script.call_count, 2)
+            self.assertEqual(agent.exports_sync.recognize.call_count, 2)
+            session.detach.assert_not_called()
+            agent.unload.assert_not_called()
+            bridge.close()
+        agent.exports_sync.dispose.assert_called_once()
+        agent.unload.assert_called_once()
         session.detach.assert_called_once()
+
+    def test_target_exit_does_not_permanently_block_new_process(self):
+        bridge = WechatBackend()
+        sessions = [MagicMock(), MagicMock()]
+        agents = []
+        for session in sessions:
+            metadata, agent = MagicMock(), MagicMock()
+            session.is_detached = False
+            session.create_script.side_effect = [metadata, agent]
+            metadata.exports_sync.info.return_value = {'path': 'test.dll'}
+            agent.exports_sync.recognize.return_value = {
+                'done': True, 'events': [{'event': 'final_result', 'text': '测试'}],
+                'frames': 1, 'bytes': 20,
+            }
+            agent.exports_sync.finalize.return_value = {'cleaned': True}
+            agent.exports_sync.dispose.return_value = {'cleaned': True}
+            agents.append(agent)
+        def exited(*args):
+            sessions[0].is_detached = True
+            raise RuntimeError('process terminated')
+        agents[0].exports_sync.recognize.side_effect = exited
+        with patch.object(backend, 'discover_pid', side_effect=[123, 456]), patch.object(backend.frida, 'attach', side_effect=sessions) as attach, patch.object(bridge, 'verify_dll'):
+            with self.assertRaises(BackendError):
+                bridge.transcribe(self.audio)
+            self.assertTrue(bridge.healthy)
+            result = bridge.transcribe(self.audio)
+            self.assertEqual(result.pid, 456)
+            self.assertEqual(attach.call_count, 2)
+            bridge.close()
+        agents[0].exports_sync.finalize.assert_not_called()
+        agents[0].exports_sync.dispose.assert_not_called()
+
+    def test_discovery_failure_is_visible_in_health_state(self):
+        bridge = WechatBackend()
+        with patch.object(backend, 'discover_pid', side_effect=BackendError('微信进程不存在')):
+            with self.assertRaises(BackendError):
+                bridge.transcribe(self.audio)
+        self.assertEqual(bridge.last_error, '微信进程不存在')
+
+    def test_uncertain_cleanup_can_recover_after_target_exits(self):
+        bridge = WechatBackend()
+        old_session = MagicMock()
+        old_session.is_detached = True
+        bridge._session = old_session
+        bridge._script = MagicMock()
+        bridge._pid = 123
+        bridge.healthy = False
+        bridge.last_error = 'cleanup_failed'
+        session, metadata, agent = MagicMock(), MagicMock(), MagicMock()
+        session.is_detached = False
+        session.create_script.side_effect = [metadata, agent]
+        metadata.exports_sync.info.return_value = {'path': 'test.dll'}
+        agent.exports_sync.recognize.return_value = {
+            'done': True, 'events': [{'event': 'final_result', 'text': '测试'}],
+            'frames': 1, 'bytes': 20,
+        }
+        agent.exports_sync.finalize.return_value = {'cleaned': True}
+        agent.exports_sync.dispose.return_value = {'cleaned': True}
+        with patch.object(backend, 'discover_pid', return_value=456), patch.object(backend.frida, 'attach', return_value=session), patch.object(bridge, 'verify_dll'):
+            self.assertEqual(bridge.transcribe(self.audio).pid, 456)
+            self.assertTrue(bridge.healthy)
+            self.assertIsNone(bridge.last_error)
+            bridge.close()
+        old_session.detach.assert_not_called()
 
 
 if __name__ == '__main__':
