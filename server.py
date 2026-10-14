@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException
 import uvicorn
 
 from backend import BackendError, MAX_BYTES, WechatBackend
+from app_paths import runtime_dir
 
 MODELS = ('wechat-voice', 'whisper-1')
 MODEL_CREATED = int(time.time())
@@ -151,13 +152,13 @@ async def transcriptions(request: Request):
         return JSONResponse({'text': result.text}, headers=headers)
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--pid', type=int, help='Optional fixed Weixin main process PID')
     parser.add_argument('--shutdown-file', type=Path, help='Local graceful shutdown signal file')
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     if args.pid:
         os.environ['WECHAT_PID'] = str(args.pid)
@@ -165,9 +166,10 @@ if __name__ == '__main__':
         parser.error('非本机监听地址需要先设置 WECHAT_API_KEY。')
     # Concurrent requests share one agent; separate workers cannot coordinate
     # native callback ownership or graceful shutdown in the same Weixin process.
-    runtime = Path(__file__).parent / '.runtime'
+    runtime = runtime_dir()
+    runtime.mkdir(parents=True, exist_ok=True)
     if args.shutdown_file and not args.shutdown_file.resolve().is_relative_to(runtime.resolve()):
-        parser.error('--shutdown-file 必须位于项目 .runtime 目录内。')
+        parser.error('--shutdown-file 必须位于服务运行目录内。')
     controller = uvicorn.Server(uvicorn.Config(app, host=args.host, port=args.port, workers=1, log_level='info'))
     finished = threading.Event()
     def watch_shutdown():
@@ -189,3 +191,7 @@ if __name__ == '__main__':
                 logging.exception('Native cleanup is uncertain; retaining the agent until Weixin exits.')
                 while backend.agent_connected:
                     time.sleep(0.5)
+
+
+if __name__ == '__main__':
+    main()

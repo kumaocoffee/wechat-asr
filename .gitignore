@@ -9,3 +9,6 @@ __pycache__/
 api-verification.json
 latest-server-verification.json
 .pytest_cache/
+build/
+dist/
+assets/app.ico

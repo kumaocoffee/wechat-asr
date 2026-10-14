@@ -6,10 +6,18 @@
 
 [English](README.en.md) · [MIT License](LICENSE) · [协议与架构](docs/ARCHITECTURE.md)
 
+## 免安装应用（推荐）
+
+从 [Releases 下载 Windows 免安装窗口版](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest)，解压整个 ZIP，双击 `WeChatASRBridge.exe`。登录微信后点击「启动服务」，即可选择音频识别，或让 Screenpipe 调用本机接口。无需安装 Python、conda 或 FFmpeg。
+
+应用支持服务状态、4 路并发、音频识别、复制/保存结果、连接设置和运行日志；关闭窗口后，接口服务继续在后台运行。详细步骤见 [窗口版使用说明](docs/PORTABLE.md)。
+
+![免安装窗口版界面](docs/portable-preview.png)
+
 ## 使用前确认
 
 - Windows x64，推荐 Windows 10/11。
-- 已安装 Miniconda/Anaconda，Python 3.11 x64。
+- 使用源码启动或开发时，需要 Miniconda/Anaconda 和 Python 3.11 x64；免安装应用不需要。
 - 微信 **4.1.13.65**，登录后保留聊天主窗口。安装目录可以不同，程序自动定位实际加载的 DLL。
 - 当前账号启用了微信语音输入的 iLink 与 Opus 配置。程序不修改开关。
 
@@ -21,7 +29,7 @@
 
 这是版本限定的实验桥接器。原生插桩存在影响微信稳定性的可能，尚不能保证长期连续运行。项目与腾讯、微信、OpenAI 无隶属关系，不包含微信安装文件、登录密钥或聊天数据库。
 
-## 快速开始
+## 从源码启动
 
 在 Miniconda/Anaconda Prompt 或已能使用 `conda` 的 PowerShell 中：
 
@@ -172,5 +180,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
 该脚本检查每次转写结果及 `agent_generation` 是否保持一致，报告写入 `.runtime/stability-verification.json`。服务停止过程可用 `tests/verify_shutdown.py --port 8765` 验证，此命令会正常停止被测试的后台实例。
 
 开发提交先进入 `developing` 分支，再通过 PR 合并到 `main`。
+
+构建免安装窗口版：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+```
+
+输出为 `dist/WeChatASRBridge-0.2.0-windows-x64-portable.zip` 和 `SHA256SUMS.txt`。构建使用 PyInstaller 文件夹模式，将窗口、API 服务、原生 agent 和 FFmpeg 打包在一起；不会包含微信程序、账号数据或 `.runtime/`。GitHub Actions 的 `Windows portable release` 工作流也可构建并上传 ZIP。
 
 协议格式参考：[OpenAI 官方 Create transcription 文档](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)。项目代码采用 [MIT](LICENSE) 许可；第三方依赖和微信客户端保留各自的许可证及条款。

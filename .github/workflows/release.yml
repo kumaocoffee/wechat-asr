@@ -1,0 +1,52 @@
+name: Windows portable release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'desktop*.py'
+      - 'app_paths.py'
+      - 'packaging/**'
+      - 'backend.py'
+      - 'server.py'
+      - 'requirements*.txt'
+      - 'docs/PORTABLE.md'
+      - '.github/workflows/release.yml'
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install application dependencies
+        run: python -m pip install -r requirements.txt -r requirements-build.txt
+      - name: Offline tests
+        run: python -m unittest discover -s tests -p test_*.py -v
+      - name: Build portable application
+        run: python packaging/build_portable.py
+      - name: Packaged runtime smoke test
+        shell: pwsh
+        run: |
+          $taskApp = Join-Path $PWD 'dist/WeChatASRBridge/WeChatASRBridge.exe'
+          $taskReport = Join-Path $PWD 'dist/packaged-smoke.json'
+          $taskProcess = Start-Process -FilePath $taskApp -ArgumentList @('--self-test', '--output', ('"' + $taskReport + '"')) -WindowStyle Hidden -PassThru -Wait
+          if ($taskProcess.ExitCode -ne 0) { throw 'Packaged runtime test failed' }
+          $taskResult = Get-Content -LiteralPath $taskReport -Raw | ConvertFrom-Json
+          if (-not $taskResult.passed -or -not $taskResult.frozen) { throw 'Invalid packaged runtime result' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-portable
+          path: |
+            dist/*-portable.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
