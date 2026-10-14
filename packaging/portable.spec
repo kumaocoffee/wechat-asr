@@ -14,8 +14,9 @@ datas = [(str(root / 'agent.js'), '.'),
 datas += collect_data_files('frida')
 a = Analysis([str(root / 'desktop.py')], pathex=[str(root)],
              binaries=[(str(ffmpeg), 'imageio_ffmpeg/binaries')], datas=datas,
-             hiddenimports=collect_submodules('uvicorn'),
-             excludes=['pytest', 'unittest', 'IPython', 'numpy', 'matplotlib', 'PIL'],
+             hiddenimports=collect_submodules('uvicorn') + ['pystray._win32'],
+             excludes=['pytest', 'unittest', 'IPython', 'numpy', 'matplotlib',
+                       'pystray._darwin', 'pystray._gtk', 'pystray._appindicator', 'pystray._xorg'],
              noarchive=False)
 # A conda base environment on PATH can supply older Tcl/Tk DLLs even when
 # the hook correctly gathers scripts from the active prefix. Prefer the DLLs

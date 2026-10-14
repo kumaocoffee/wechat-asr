@@ -12,7 +12,9 @@ import traceback
 import webbrowser
 
 from app_paths import resource_dir, runtime_dir
-from desktop_service import ServiceController, VERSION, health, saved_port, save_port, transcribe_file
+from desktop_service import (ServiceController, VERSION, health, saved_port, save_port,
+                             saved_api_key, save_settings, transcribe_file)
+from desktop_tray import TrayIcon
 
 
 class DesktopApplication:
@@ -23,7 +25,14 @@ class DesktopApplication:
         self.runtime = runtime_dir()
         self.runtime.mkdir(parents=True, exist_ok=True)
         self.controller = ServiceController(port)
+        self.controllers = {port: self.controller}
         self.events = queue.Queue()
+        self.tray = None
+        self.tray_ready = False
+        self.tray_pending = False
+        self.exit_requested = False
+        self.closed = False
+        self.layout_pending = False
         self.operation = None
         self.polling = False
         self.connected = False
@@ -31,7 +40,13 @@ class DesktopApplication:
         self.audio_path = None
         self.started = None
         self.port = tk.StringVar(value=str(port))
-        self.api_key = tk.StringVar(value=os.getenv('WECHAT_API_KEY', ''))
+        key_error = None
+        try:
+            key = saved_api_key(self.runtime, default=os.getenv('WECHAT_API_KEY', ''))
+        except ValueError as error:
+            key, key_error = '', str(error)
+        self.api_key = tk.StringVar(value=key)
+        self.applied_api_key = key
         self.status = tk.StringVar(value='正在检查服务…')
         self.detail = tk.StringVar(value='请保持微信登录。')
         self.file_name = tk.StringVar(value='还没有选择音频')
@@ -39,9 +54,12 @@ class DesktopApplication:
         self.result_status = tk.StringVar(value='选择音频后，点击开始识别。')
         self.endpoint = tk.StringVar(value=f'http://127.0.0.1:{port}')
         self._build()
+        self.root.bind('<Configure>', lambda _: self._queue_layout_check(), add='+')
         self.root.after(100, self._drain_events)
         self.root.after(150, self._poll)
         self.root.protocol('WM_DELETE_WINDOW', self._close)
+        if key_error:
+            self.root.after(200, lambda: self._show_error(key_error))
 
     def _build(self):
         tk, ttk, root = self.tk, self.ttk, self.root
@@ -94,15 +112,17 @@ class DesktopApplication:
         body.rowconfigure(0, weight=1)
         left = tk.Frame(body, bg=c['paper'], padx=22, pady=18)
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(9, weight=1)
         right = tk.Frame(body, bg=c['paper'], padx=24, pady=22)
         right.grid(row=0, column=1, sticky='nsew')
-        self._label(left, '本机服务', 14, bold=True).pack(anchor='w')
+        self._label(left, '本机服务', 14, bold=True).grid(row=0, column=0, sticky='w')
         self.state_label = self._label(left, '', 11, bold=True)
         self.state_label.configure(textvariable=self.status)
-        self.state_label.pack(anchor='w', pady=(12, 4))
-        self._label(left, '', 9, variable=self.detail, wrap=270).pack(anchor='w')
+        self.state_label.grid(row=1, column=0, sticky='w', pady=(12, 4))
+        self._label(left, '', 9, variable=self.detail, wrap=270).grid(row=2, column=0, sticky='w')
         slots = tk.Frame(left, bg=c['paper'])
-        slots.pack(fill='x', pady=(12, 6))
+        slots.grid(row=3, column=0, sticky='ew', pady=(12, 6))
         self.slots = []
         for _ in range(4):
             slot = tk.Label(slots, text='空闲', bg='#EAF2F6', fg=c['muted'],
@@ -110,22 +130,22 @@ class DesktopApplication:
             slot.pack(side='left', expand=True, fill='x', padx=(0, 4))
             self.slots.append(slot)
         buttons = tk.Frame(left, bg=c['paper'])
-        buttons.pack(fill='x', pady=(12, 12))
+        buttons.grid(row=4, column=0, sticky='ew', pady=(12, 12))
         self.start_button = ttk.Button(buttons, text='启动服务', command=self._start, style='Accent.TButton')
         self.start_button.pack(side='left', expand=True, fill='x', padx=(0, 8))
         self.stop_button = ttk.Button(buttons, text='停止服务', command=self._stop)
         self.stop_button.pack(side='left', expand=True, fill='x')
-        tk.Frame(left, bg=c['line'], height=1).pack(fill='x', pady=(0, 12))
-        self._label(left, '接口地址', 10, bold=True).pack(anchor='w')
-        self._label(left, '', 10, variable=self.endpoint, mono=True).pack(anchor='w', pady=(8, 10))
+        tk.Frame(left, bg=c['line'], height=1).grid(row=5, column=0, sticky='ew', pady=(0, 12))
+        self._label(left, '接口地址', 10, bold=True).grid(row=6, column=0, sticky='w')
+        self._label(left, '', 10, variable=self.endpoint, mono=True).grid(row=7, column=0, sticky='w', pady=(8, 10))
         links = tk.Frame(left, bg=c['paper'])
-        links.pack(fill='x')
+        links.grid(row=8, column=0, sticky='ew')
         ttk.Button(links, text='复制 SDK 地址', command=self._copy_endpoint).pack(side='left', padx=(0, 8))
         ttk.Button(links, text='接口文档', command=self._open_docs).pack(side='left')
         self.port_box = None
         self.settings_window = None
         bottom = tk.Frame(left, bg=c['paper'])
-        bottom.pack(side='bottom', before=left.winfo_children()[0], fill='x', pady=(12, 0))
+        bottom.grid(row=10, column=0, sticky='ew', pady=(12, 0))
         self.settings_button = ttk.Button(bottom, text='连接设置', command=self._settings)
         self.settings_button.pack(side='left', fill='x', expand=True, padx=(0, 8))
         ttk.Button(bottom, text='运行日志', command=self._open_logs).pack(side='left', fill='x', expand=True)
@@ -151,7 +171,7 @@ class DesktopApplication:
         text_frame.pack(fill='both', expand=True)
         self.result = tk.Text(text_frame, wrap='word', state='disabled', bg='white', fg=c['ink'],
                               font=('Microsoft YaHei UI', 11), padx=14, pady=14,
-                              relief='flat', borderwidth=0, height=8, width=30, undo=False)
+                              relief='flat', borderwidth=0, height=4, width=30, undo=False)
         scrollbar = ttk.Scrollbar(text_frame, command=self.result.yview)
         scrollbar.pack(side='right', fill='y')
         self.result.configure(yscrollcommand=scrollbar.set)
@@ -186,20 +206,22 @@ class DesktopApplication:
 
     def _drain_events(self):
         try:
-            while True:
+            while not self.closed:
                 self.events.get_nowait()()
         except queue.Empty:
             pass
-        self.root.after(100, self._drain_events)
+        if not self.closed:
+            self.root.after(100, self._drain_events)
 
     def _apply_port(self, event=None):
-        if self.operation:
+        if self.operation or self.exit_requested:
             return False
         try:
             value = int(self.port.get())
             if value == self.controller.port:
                 return True
             self.controller = ServiceController(value)
+            self.controllers[value] = self.controller
             save_port(value, self.runtime)
             self.connected = self.owned = False
             self.endpoint.set(f'http://127.0.0.1:{value}')
@@ -212,7 +234,9 @@ class DesktopApplication:
             return False
 
     def _poll(self):
-        if not self.polling and self.operation not in ('starting', 'stopping'):
+        if self.closed:
+            return
+        if not self.exit_requested and not self.polling and self.operation not in ('starting', 'stopping'):
             self.polling = True
             controller = self.controller
             def check():
@@ -260,7 +284,7 @@ class DesktopApplication:
         self._update_buttons()
 
     def _update_buttons(self):
-        idle = self.operation is None
+        idle = self.operation is None and not self.exit_requested
         for button, enabled in ((self.start_button, idle and not self.connected),
                                  (self.stop_button, idle and self.connected and self.owned),
                                  (self.recognize_button, idle and self.connected and self.audio_path is not None),
@@ -269,6 +293,27 @@ class DesktopApplication:
             button.configure(state='normal' if enabled else 'disabled')
         if self.port_box is not None and self.port_box.winfo_exists():
             self.port_box.configure(state='normal' if idle else 'disabled')
+        self._queue_layout_check()
+
+    def _queue_layout_check(self):
+        if not self.closed and not self.layout_pending:
+            self.layout_pending = True
+            self.root.after_idle(self._fit_window)
+
+    def _fit_window(self):
+        self.layout_pending = False
+        if self.closed:
+            return
+        # Font metrics depend on Windows DPI; a fixed 680px minimum can clip
+        # the link buttons before the bottom actions. Keep all fixed controls
+        # inside the client area and let only unused space/result text grow.
+        width = max(930, self.root.winfo_reqwidth())
+        height = max(680, self.root.winfo_reqheight())
+        if tuple(self.root.minsize()) != (width, height):
+            self.root.minsize(width, height)
+        current_width, current_height = self.root.winfo_width(), self.root.winfo_height()
+        if current_width < width or current_height < height:
+            self.root.geometry(f'{max(current_width, width)}x{max(current_height, height)}')
 
     def _settings(self):
         tk, ttk = self.tk, self.ttk
@@ -287,15 +332,55 @@ class DesktopApplication:
         self.port_box.pack(fill='x', pady=(8, 16))
         ttk.Label(panel, text='API Key（现有服务启用鉴权时填写）').pack(anchor='w')
         ttk.Entry(panel, textvariable=self.api_key, show='•', width=28).pack(fill='x', pady=(8, 16))
-        ttk.Label(panel, text='密钥仅用于本次连接，不会保存到文件。').pack(anchor='w', pady=(0, 16))
         def apply():
-            if self._apply_port():
+            if self._apply_settings():
                 window.destroy()
         ttk.Button(panel, text='应用设置', style='Accent.TButton', command=apply).pack(fill='x')
+
+    def _apply_settings(self):
+        if self.operation or self.exit_requested:
+            return False
+        old = self.controller
+        key = self.api_key.get()
+        try:
+            port = int(self.port.get())
+            controller = old if port == old.port else ServiceController(port)
+            save_settings(port, key, self.runtime)
+        except (ValueError, OSError) as error:
+            self._show_error(str(error))
+            return False
+        changed = port != old.port or key != self.applied_api_key
+        restart = changed and self.connected and self.owned
+        self.applied_api_key = key
+        self.controller = controller
+        self.controllers[port] = controller
+        self.endpoint.set(f'http://127.0.0.1:{port}')
+        if port != old.port:
+            self.connected = self.owned = False
+        if restart:
+            self.operation = 'starting'
+            self.status.set('正在启动服务…')
+            self.detail.set('等待已提交的识别与会话清理完成。')
+            def restart_service():
+                old.stop()
+                return controller.start(api_key=key), controller.owns_service()
+            def done(result):
+                self.operation = None
+                self._show_health(controller, result)
+            self._work(restart_service, done, self._operation_error)
+        self._update_buttons()
+        return True
 
     def _start(self):
         if not self._apply_port():
             return
+        key = self.api_key.get()
+        try:
+            save_settings(self.controller.port, key, self.runtime)
+        except (ValueError, OSError) as error:
+            self._show_error(str(error))
+            return
+        self.applied_api_key = key
         self.operation = 'starting'
         self.status.set('正在启动服务…')
         self.detail.set('首次启动可能需要几秒钟。')
@@ -304,7 +389,7 @@ class DesktopApplication:
         def done(result):
             self.operation = None
             self._show_health(controller, result)
-        self._work(lambda: (controller.start(), controller.owns_service()), done, self._operation_error)
+        self._work(lambda: (controller.start(api_key=key), controller.owns_service()), done, self._operation_error)
 
     def _stop(self):
         self.operation = 'stopping'
@@ -410,10 +495,85 @@ class DesktopApplication:
         messagebox.showerror('微信语音接口', message, parent=self.root)
 
     def _close(self):
-        if self.operation == 'recognizing':
-            from tkinter import messagebox
-            if not messagebox.askyesno('关闭窗口', '识别正在进行，关闭后无法在此窗口查看结果。继续关闭？', parent=self.root):
+        if self.exit_requested or self.closed:
+            return
+        if self.tray_ready:
+            self._hide_window()
+        elif not self.tray_pending:
+            self.tray_pending = True
+            try:
+                self.tray = TrayIcon(lambda: self.events.put(self._restore_window),
+                                     lambda: self.events.put(self._request_exit))
+                self.tray.start(lambda: self.events.put(self._tray_started),
+                                lambda message: self.events.put(lambda: self._tray_failed(message)))
+            except Exception as error:
+                self._tray_failed(str(error))
+
+    def _tray_started(self):
+        self.tray_pending = False
+        self.tray_ready = True
+        if not self.exit_requested:
+            self._hide_window()
+
+    def _tray_failed(self, message):
+        self.tray_pending = self.tray_ready = False
+        if self.tray:
+            self.tray.stop()
+            self.tray = None
+        self._restore_window()
+        self._show_error('无法启动系统托盘，窗口将保持打开：' + message)
+
+    def _hide_window(self):
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.withdraw()
+        self.root.withdraw()
+
+    def _restore_window(self):
+        if self.closed:
+            return
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.deiconify()
+            self.settings_window.lift()
+
+    def _request_exit(self):
+        if self.exit_requested or self.closed:
+            return
+        self.exit_requested = True
+        self._update_buttons()
+        self._begin_exit()
+
+    def _begin_exit(self):
+        if self.operation:
+            # A launch/recognition worker must finish before deciding which
+            # child to stop. Hiding the window does not discard its result.
+            self.root.after(100, self._begin_exit)
+            return
+        self.operation = 'exiting'
+        self.status.set('正在停止服务…')
+        self.detail.set('等待已提交的识别与会话清理完成。')
+        def stop_services():
+            for controller in self.controllers.values():
+                if controller.owns_service():
+                    controller.stop()
+        self._work(stop_services, lambda _: self._finish_exit(), self._exit_failed)
+
+    def _exit_failed(self, message):
+        self.exit_requested = False
+        self.operation = None
+        self._restore_window()
+        self._operation_error(message)
+
+    def _finish_exit(self):
+        if self.tray:
+            try:
+                self.tray.stop()
+            except Exception as error:
+                self._exit_failed(str(error))
                 return
+        self.closed = True
         self.root.destroy()
 
 
@@ -430,11 +590,16 @@ def self_test(output):
     app._sample()
     report['gui'] = app.start_button.winfo_exists() and app.result.winfo_exists()
     report['sample_audio'] = app.audio_path is not None and app.audio_path.is_file()
+    import pystray
+    from desktop_settings import _crypt
+    report['tray_backend'] = pystray.Icon.__module__ == 'pystray._win32'
+    test_key = b'"packaged-self-test"'
+    report['key_encryption'] = _crypt(_crypt(test_key, protect=True), protect=False) == test_key
     root.destroy()
     result = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-version'], capture_output=True,
                             timeout=10, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     report['ffmpeg'] = result.returncode == 0
-    report['passed'] = report['assets'] and report['ffmpeg'] and report['gui'] and report['sample_audio']
+    report['passed'] = all(report[k] for k in ('assets', 'ffmpeg', 'gui', 'sample_audio', 'tray_backend', 'key_encryption'))
     Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     return 0 if report['passed'] else 1
 
@@ -455,11 +620,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--port', type=int)
     parser.add_argument('--self-test', action='store_true')
+    parser.add_argument('--self-test-lifecycle', action='store_true')
     parser.add_argument('--output', type=Path)
     options = parser.parse_args(args)
-    if options.self_test:
+    if options.self_test or options.self_test_lifecycle:
         if not options.output:
             parser.error('--self-test requires --output')
+        if options.self_test_lifecycle:
+            from desktop_verify import lifecycle_self_test
+            return lifecycle_self_test(options.output)
         return self_test(options.output)
     if sys.platform == 'win32':
         import ctypes
@@ -481,10 +650,11 @@ if __name__ == '__main__':
         runtime = runtime_dir()
         runtime.mkdir(parents=True, exist_ok=True)
         (runtime / 'desktop-error.log').write_text(traceback.format_exc(), encoding='utf-8')
-        if '--self-test' in sys.argv and '--output' in sys.argv:
+        testing = '--self-test' in sys.argv or '--self-test-lifecycle' in sys.argv
+        if testing and '--output' in sys.argv:
             Path(sys.argv[sys.argv.index('--output') + 1]).write_text(
                 json.dumps({'passed': False, 'error': traceback.format_exc()}, ensure_ascii=False, indent=2), encoding='utf-8')
-        if '--serve' not in sys.argv and '--self-test' not in sys.argv:
+        if '--serve' not in sys.argv and not testing:
             import tkinter.messagebox
             try:
                 tkinter.messagebox.showerror('应用启动失败', f'请查看错误日志：\n{runtime / "desktop-error.log"}')

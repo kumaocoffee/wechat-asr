@@ -3,7 +3,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
+import sys
 
 import httpx
 
@@ -11,6 +12,8 @@ import app_paths
 import desktop_service
 from desktop_service import ServiceController, transcribe_file
 import server
+import desktop_settings
+from desktop import DesktopApplication
 
 
 class PortablePathsTests(unittest.TestCase):
@@ -21,7 +24,7 @@ class PortablePathsTests(unittest.TestCase):
                 self.assertEqual(app_paths.resource_dir(), root / 'bundle')
                 self.assertEqual(app_paths.runtime_dir(), root / 'user' / 'WeChatASRBridge' / 'runtime')
 
-    def test_only_port_is_persisted_and_bad_settings_fall_back(self):
+    def test_legacy_port_settings_and_bad_settings_fall_back(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.assertEqual(desktop_service.saved_port(root), 8765)
@@ -39,6 +42,39 @@ class PortablePathsTests(unittest.TestCase):
                     server.main(['--shutdown-file', str(root / 'outside')])
             self.assertEqual(error.exception.code, 2)
             launch.assert_not_called()
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'Windows DPAPI')
+class PersistentKeyTests(unittest.TestCase):
+    def test_key_round_trip_is_encrypted_and_survives_port_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = 'unit-only-key-你好'
+            desktop_settings.save_settings(18765, key, root)
+            self.assertNotIn(key, (root / 'desktop-settings.json').read_text(encoding='utf-8'))
+            self.assertEqual(desktop_settings.saved_api_key(root), key)
+            desktop_settings.save_port(18766, root)
+            self.assertEqual(desktop_settings.saved_port(root), 18766)
+            self.assertEqual(desktop_settings.saved_api_key(root), key)
+            desktop_settings.save_settings(18766, '', root)
+            self.assertEqual(desktop_settings.saved_api_key(root, default='environment-key'), '')
+
+    def test_encryption_failure_preserves_previous_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            desktop_settings.save_settings(18765, 'existing-test-key', root)
+            before = (root / 'desktop-settings.json').read_bytes()
+            with patch.object(desktop_settings, '_crypt', side_effect=OSError('failed')):
+                with self.assertRaises(OSError):
+                    desktop_settings.save_settings(18766, 'replacement-test-key', root)
+            self.assertEqual((root / 'desktop-settings.json').read_bytes(), before)
+
+    def test_corrupt_encrypted_key_is_not_silently_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'desktop-settings.json').write_text(json.dumps({'port': 18765, 'api_key_dpapi': 'not valid base64'}))
+            with self.assertRaisesRegex(ValueError, '无法解密'):
+                desktop_settings.saved_api_key(root)
 
 
 class ServiceOwnershipTests(unittest.TestCase):
@@ -87,6 +123,97 @@ class ServiceOwnershipTests(unittest.TestCase):
         with patch.object(desktop_service, 'process_info', side_effect=[info, None]):
             self.controller.stop()
         self.assertTrue(Path(data['shutdown_file']).is_file())
+
+    def test_desktop_key_reaches_child_without_command_or_metadata_leak(self):
+        current = {'backend': desktop_service.APP_BACKEND, 'status': 'ok'}
+        for key in ('unit-only-desktop-key', ''):
+            with self.subTest(key_set=bool(key)), \
+                    patch.dict(desktop_service.os.environ, {'WECHAT_API_KEY': 'inherited-key'}), \
+                    patch.object(desktop_service, 'health', side_effect=[None, current]), \
+                    patch.object(desktop_service, 'port_in_use', return_value=False), \
+                    patch.object(desktop_service.subprocess, 'Popen') as launch:
+                launch.return_value.pid = 123
+                launch.return_value.poll.return_value = None
+                self.controller.start(api_key=key)
+                args, options = launch.call_args
+                self.assertEqual(options['env'].get('WECHAT_API_KEY', ''), key)
+                self.assertNotIn('unit-only-desktop-key', ' '.join(args[0]))
+                self.assertNotIn('unit-only-desktop-key', self.controller.metadata_path.read_text())
+                self.assertEqual(desktop_service.os.environ['WECHAT_API_KEY'], 'inherited-key')
+
+
+class DesktopLifetimeTests(unittest.TestCase):
+    def application(self):
+        app = DesktopApplication.__new__(DesktopApplication)
+        app.root = Mock()
+        app.root.after = Mock()
+        app.settings_window = None
+        app.operation = None
+        app.closed = app.exit_requested = app.tray_pending = False
+        app.tray_ready = True
+        app.tray = Mock()
+        app._update_buttons = Mock()
+        app.status = Mock()
+        app.detail = Mock()
+        app._show_error = Mock()
+        app._operation_error = Mock()
+        return app
+
+    def test_close_during_recognition_keeps_window_and_service_alive(self):
+        app = self.application()
+        app.operation = 'recognizing'
+        app._close()
+        app.root.withdraw.assert_called_once()
+        app.root.destroy.assert_not_called()
+        self.assertFalse(app.exit_requested)
+        app.tray.stop.assert_not_called()
+
+    def test_exit_waits_for_launch_worker_and_only_stops_owned_children(self):
+        app = self.application()
+        owned, external = Mock(), Mock()
+        owned.owns_service.return_value = True
+        external.owns_service.return_value = False
+        app.controllers = {18765: owned, 18766: external}
+        app._work = Mock(side_effect=lambda action, success, failure: success(action()))
+        app.operation = 'starting'
+        app._request_exit()
+        app._work.assert_not_called()
+        app.root.destroy.assert_not_called()
+        app.operation = None
+        app.root.after.call_args.args[1]()
+        owned.stop.assert_called_once()
+        external.stop.assert_not_called()
+        app.tray.stop.assert_called_once()
+        app.root.destroy.assert_called_once()
+
+    def test_shutdown_failure_keeps_application_recoverable(self):
+        app = self.application()
+        owned = Mock()
+        owned.owns_service.return_value = True
+        owned.stop.side_effect = RuntimeError('cleanup still pending')
+        app.controllers = {18765: owned}
+        def run(action, success, failure):
+            try:
+                result = action()
+            except RuntimeError as error:
+                failure(str(error))
+            else:
+                success(result)
+        app._work = run
+        app._request_exit()
+        app.root.destroy.assert_not_called()
+        app.root.deiconify.assert_called_once()
+        self.assertFalse(app.exit_requested)
+        self.assertIsNone(app.operation)
+
+    def test_tray_start_failure_does_not_hide_window(self):
+        app = self.application()
+        app.tray_ready = False
+        with patch('desktop.TrayIcon', side_effect=RuntimeError('tray unavailable')):
+            app._close()
+        app.root.withdraw.assert_not_called()
+        app.root.destroy.assert_not_called()
+        app._show_error.assert_called_once()
 
 
 class DesktopTranscriptionTests(unittest.TestCase):

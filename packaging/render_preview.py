@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--state', choices=['ready', 'result', 'stopped', 'error'], default='result')
     parser.add_argument('--width', type=int, default=1000)
     parser.add_argument('--height', type=int, default=720)
+    parser.add_argument('--sample', action='store_true', help='Select bundled sample without inventing a recognition result')
     args = parser.parse_args()
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -27,6 +28,7 @@ def main():
     app = DesktopApplication(root)
     for timer in root.tk.call('after', 'info'):
         root.after_cancel(timer)
+    app.layout_pending = False
     root.geometry(f'{args.width}x{args.height}+0+0')
     # Populate deterministic preview data through the app's real view methods.
     # No native recognition, file upload, OS input, or unrelated window capture.
@@ -34,8 +36,9 @@ def main():
     if args.state == 'error':
         state['last_error'] = '请先登录微信并保留聊天主窗口。'
     app._show_health(app.controller, (state, state is not None))
-    if args.state in ('result', 'error'):
+    if args.state in ('result', 'error') or args.sample:
         app._sample()
+    if args.state in ('result', 'error'):
         app.file_detail.set('6.3 秒 · 随应用提供的合成示例音频')
     if args.state == 'result':
         app.result.configure(state='normal')
@@ -43,6 +46,9 @@ def main():
         app.result.configure(state='disabled')
         app.result_status.set('识别完成 · 示例结果')
     root.update_idletasks()
+    root.update()
+    root.update_idletasks()
+    app._fit_window()
     root.update()
     root.update_idletasks()
     # Pillow's window capture calls PrintWindow for this application's own

@@ -10,7 +10,7 @@
 
 从 [Releases 下载 Windows 免安装窗口版](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest)，解压整个 ZIP，双击 `WeChatASRBridge.exe`。登录微信后点击「启动服务」，即可选择音频识别，或让 Screenpipe 调用本机接口。无需安装 Python、conda 或 FFmpeg。
 
-应用支持服务状态、4 路并发、音频识别、复制/保存结果、连接设置和运行日志；关闭窗口后，接口服务继续在后台运行。详细步骤见 [窗口版使用说明](docs/PORTABLE.md)。
+应用支持服务状态、4 路并发、音频识别、复制/保存结果、连接设置和运行日志；端口与 API Key 可保存，密钥使用 Windows DPAPI 加密。关闭窗口后应用驻留系统托盘，接口服务继续运行；托盘菜单可以恢复窗口或正常退出并停止自有服务。详细步骤见 [窗口版使用说明](docs/PORTABLE.md)。
 
 ![免安装窗口版界面](docs/portable-preview.png)
 

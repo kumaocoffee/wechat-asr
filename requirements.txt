@@ -6,3 +6,5 @@ anyio==4.15.1
 imageio-ffmpeg==0.6.0
 openai==3.29.0
 httpx==0.28.1
+pystray==0.19.5
+Pillow==12.3.0

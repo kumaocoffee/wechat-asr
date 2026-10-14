@@ -1,5 +1,6 @@
 """Build the Windows portable folder, ZIP, notices and SHA-256 checksums."""
 import hashlib
+import argparse
 import importlib.metadata
 from pathlib import Path
 import shutil
@@ -33,14 +34,14 @@ def notices(folder):
              'No Weixin binaries or account data are included.', '']
     packages = ['frida', 'fastapi', 'starlette', 'uvicorn', 'anyio', 'imageio-ffmpeg',
                 'httpx', 'httpcore', 'h11', 'pydantic', 'pydantic-core', 'python-multipart',
-                'certifi', 'idna', 'typing-extensions', 'openai', 'pyinstaller']
+                'certifi', 'idna', 'typing-extensions', 'openai', 'pyinstaller', 'pystray', 'Pillow', 'six']
     for name in packages:
         distribution = importlib.metadata.distribution(name)
         lines.append(f'{distribution.metadata["Name"]} {distribution.version}')
         for file in distribution.files or []:
             if ('license' in str(file).lower() or Path(file).name.lower().startswith(('copying', 'notice'))):
                 source = Path(distribution.locate_file(file))
-                if source.is_file() and source.suffix.lower() in ('', '.txt', '.md', '.rst'):
+                if source.is_file() and source.suffix.lower() in ('', '.txt', '.md', '.rst', '.lgpl', '.gpl'):
                     destination = target / name / Path(file).name
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(source, destination)
@@ -72,7 +73,10 @@ def notices(folder):
 def main():
     if sys.platform != 'win32':
         raise SystemExit('Build this package on Windows x64.')
-    build, dist = ROOT / 'build', ROOT / 'dist'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist')
+    options = parser.parse_args()
+    build, dist = ROOT / 'build', options.output_dir.resolve()
     for directory in (build, dist):
         # PyInstaller may replace its output folders. Never pass an output path
         # resolving outside this checkout, including through a junction/symlink.
