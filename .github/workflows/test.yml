@@ -23,4 +23,4 @@ jobs:
       - name: Test API contract and audio validation
         run: python -m unittest discover -s tests -p test_*.py -v
       - name: Check source compilation
-        run: python -m compileall -q backend.py server.py doctor.py example_openai.py tests
+        run: python -m compileall -q backend.py server.py desktop.py desktop_service.py app_paths.py doctor.py example_openai.py packaging tests

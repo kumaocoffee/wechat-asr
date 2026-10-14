@@ -4,7 +4,13 @@ An experimental Windows ASR bridge exposing the speech recognition used by Weixi
 
 The actual backend is the user's logged-in Weixin client and Weixin's recognition service. Audio is sent through Weixin, **not to OpenAI**. `whisper-1` is a compatibility alias, not an actual Whisper model.
 
-## Requirements
+## Portable Windows app
+
+[Download the portable ZIP from Releases](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest), extract the entire folder, and run `WeChatASRBridge.exe`. No Python, conda or FFmpeg installation is needed. Log in to the supported Weixin client, start the service, and select an audio file or connect Screenpipe. The app provides status, four concurrent recognition slots, sample audio, result copying/saving, connection settings and logs. Closing the window leaves its service running in the background.
+
+See [portable usage](docs/PORTABLE.md). Keep the `_internal` folder alongside the executable. Build from source with `build.ps1`; GitHub Actions can build the same portable artifact.
+
+## Source requirements
 
 Windows x64, Miniconda/Anaconda, Python 3.11 x64, and a logged-in **Weixin 4.1.13.65** client with iLink and Opus enabled. The loaded DLL must match the SHA-256 documented in the Chinese README. Different builds are rejected before installing native hooks.
 

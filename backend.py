@@ -14,8 +14,9 @@ import wave
 
 import frida
 import imageio_ffmpeg
+from app_paths import resource_dir
 
-ROOT = Path(__file__).resolve().parent
+ROOT = resource_dir()
 EXPECTED_SHA256 = '8f7406a8a465e851ee10eaecccb572d0e5b4e00d480c770938c714c396097b74'
 MAX_BYTES = 25 * 1024 * 1024
 log = logging.getLogger(__name__)
