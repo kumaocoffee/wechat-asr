@@ -8,6 +8,8 @@
 
 本分支另提供微信输入法 **3.0.0.34** 的实验后端，通过 `server.py --backend wetype --port 8766` 启动，模型别名为 `wetype-voice`。使用条件、验证方法和边界见 [微信输入法后端](docs/WETYPE.md)。
 
+豆包网页的匿名游客 ASR 原型另放在 [experiments/doubao_asr](experiments/doubao_asr/README.md)，可通过命令行独立转写 WAV；目前尚未接入 HTTP 服务和桌面窗口。
+
 ## 免安装应用（推荐）
 
 从 [Releases 下载 Windows 免安装窗口版](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest)，解压整个 ZIP，双击 `WeChatASRBridge.exe`。登录微信后点击「启动服务」，即可选择音频识别，或让 Screenpipe 调用本机接口。无需安装 Python、conda 或 FFmpeg。
