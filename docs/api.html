@@ -11,14 +11,14 @@
   </style>
 </head>
 <body>
-  <header><strong>ASR Bridge <span>／ 接口文档</span></strong><span>OpenAI 兼容格式 · v0.3.1</span></header>
+  <header><strong>ASR Bridge <span>／ 接口文档</span></strong><span>OpenAI 兼容格式 · v0.3.2</span></header>
   <div class="layout">
     <nav aria-label="文档目录"><span>接口参考</span><a href="#start">快速接入</a><a href="#models">模型路由</a><a href="#parameters">请求参数</a><a href="#examples">调用示例</a><a href="#authentication">鉴权</a><a href="#responses">响应与错误</a><a href="#compatibility">兼容范围</a></nav>
     <main>
       <h1>音频转写接口</h1>
       <p class="lead">统一接入微信、微信输入法和豆包语音，通过 model 指定后端。</p>
       <section id="start"><h2>快速接入</h2><div class="base"><span>Base URL</span><code data-baseurl>http://127.0.0.1:8765/v1</code></div><p>将 OpenAI SDK 的 <code>base_url</code> 指向本机接口地址，再提交音频文件。</p><div class="route"><span class="method">POST</span><code>/v1/audio/transcriptions</code><span class="hint">multipart/form-data</span></div><p class="hint">默认启动三个独立并发池。实际可用模型以当前服务的 <code>GET /v1/models</code> 返回为准。</p></section>
-      <section id="models"><h2>模型路由</h2><table><thead><tr><th>model</th><th>调用后端</th></tr></thead><tbody><tr><td><code>wechat-voice</code></td><td>微信桌面端语音识别</td></tr><tr><td><code>wetype-voice</code></td><td>微信输入法语音识别</td></tr><tr><td><code>doubao-voice</code></td><td>豆包网页版语音识别</td></tr></tbody></table><p class="hint">这里的 model 是本地路由标识，不代表上游服务公开的模型名称或版本。model 必填，只接受上述正式名称。每个模型默认并发为 4，三个模型合计运行上限为 8，超出本池或总额度时排队。各池并发可在应用设置中调整，不作为转写请求参数传入。</p><div class="route"><span class="method">GET</span><code>/v1/models</code><span class="hint">查询当前服务可用模型</span></div></section>
+      <section id="models"><h2>模型路由</h2><table><thead><tr><th>model</th><th>调用后端</th></tr></thead><tbody><tr><td><code>wechat-voice</code></td><td>微信桌面端语音识别</td></tr><tr><td><code>wetype-voice</code></td><td>微信输入法语音识别</td></tr><tr><td><code>doubao-voice</code></td><td>豆包网页版语音识别</td></tr></tbody></table><p class="hint">这里的 model 是本地路由标识，不代表上游服务公开的模型名称或版本。model 必填，只接受上述正式名称。每个模型默认并发为 4，各模型独立调度，超出本池并发数时排队。各池并发可在应用设置中调整，不作为转写请求参数传入。</p><div class="route"><span class="method">GET</span><code>/v1/models</code><span class="hint">查询当前服务可用模型</span></div></section>
       <section id="parameters"><h2>请求参数</h2><table><thead><tr><th>参数 / 类型</th><th>说明</th></tr></thead><tbody><tr><td><code>file</code><span class="required">必填</span><small>file · 二进制</small></td><td>待转写的音频文件，最大 25 MiB。上传文件内容，不接受本地路径字符串或 URL。</td></tr><tr><td><code>model</code><span class="required">必填</span><small>string</small></td><td>使用上面的路由标识选择后端。服务未提供的标识返回参数错误。</td></tr><tr><td><code>response_format</code><small>string · 默认 json</small></td><td><code>json</code> 返回包含 <code>text</code> 的 JSON；<code>text</code> 返回 UTF-8 纯文本。</td></tr><tr><td><code>stream</code><small>boolean · 默认 false</small></td><td>仅接受 <code>false</code>，当前不提供流式响应。</td></tr><tr><td><code>temperature</code><small>number · 默认 0</small></td><td>仅接受 <code>0</code>。这是兼容参数，不影响上游语音模型。</td></tr></tbody></table><p class="hint">使用 SDK 或表单库时让库自动生成 multipart boundary，不要手动设置不完整的 Content-Type。</p></section>
       <section id="examples"><h2>调用示例</h2><div class="code-title"><h3>Python · OpenAI SDK</h3><button type="button" data-copy="python-example">复制</button></div><pre id="python-example"><code>from openai import OpenAI
 
