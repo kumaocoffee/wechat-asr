@@ -7,6 +7,8 @@ import imageio_ffmpeg
 root = Path(SPECPATH).parent
 ffmpeg = Path(imageio_ffmpeg.get_ffmpeg_exe())
 datas = [(str(root / 'agent.js'), '.'),
+         (str(root / 'wetype_agent.js'), '.'),
+         (str(root / 'docs' / 'api.html'), 'docs'),
          (str(root / 'assets' / 'app.ico'), 'assets'),
          (str(root / 'tests' / 'fixtures' / 'test.wav'), 'assets'),
          (str(root / 'LICENSE'), '.'),

@@ -52,7 +52,7 @@ rpc.exports = {
    return Array.from(new Uint8Array(output.readByteArray(size)));
   } finally { release(object); }
  },
- request(bytes) {
+ request(bytes, owner = '') {
   if (closing || !bytes.length) throw Error('Invalid request or agent stopping');
   return new Promise((resolve, reject) => {
    const data = Memory.alloc(bytes.length), options = Memory.alloc(16), user = Memory.alloc(8);
@@ -60,7 +60,7 @@ rpc.exports = {
    options.writeByteArray(new Uint8Array(16));
    options.writeU32(3000);
    options.add(4).writeU8(2);
-   const key = user.toString(), task = {data, options, user, resolve, reject};
+   const key = user.toString(), task = {data, options, user, resolve, reject, owner};
    tasks.set(key, task);
    task.timeout = setTimeout(() => {
     // Do not release native callback/user data without acknowledgement.
@@ -81,7 +81,11 @@ rpc.exports = {
   });
  },
  stats() { return {pending:tasks.size, callbacks, closing}; },
- finalize() { return {cleaned:tasks.size === 0 && callbacks === 0}; },
+ finalize(owner) {
+  // A live task belonging to another audio must not quarantine this caller.
+  return {cleaned: owner === undefined ? tasks.size === 0 && callbacks === 0 :
+   !Array.from(tasks.values()).some(task => task.owner === owner)};
+ },
  dispose() {
   closing = true;
   return {cleaned:tasks.size === 0 && callbacks === 0};

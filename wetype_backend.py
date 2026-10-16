@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path
 import time
+import threading
 import uuid
 
 import frida
@@ -51,6 +52,7 @@ class WetypeBackend(WechatBackend):
     def __init__(self):
         super().__init__()
         self.last_completion = None
+        self._request_context = threading.local()
 
     def verify_modules(self, modules):
         paths = {entry['name'].lower(): Path(entry['path']) for entry in modules}
@@ -69,10 +71,14 @@ class WetypeBackend(WechatBackend):
             raise BackendError('无法读取微信输入法模块。', code='wetype_unavailable') from error
 
     def _ensure_agent(self, pid):
+        if pid == self._unsafe_pid:
+            raise BackendError('输入法连接意外断开，请退出输入法后重新启动。', code='agent_disconnected')
         if self.agent_connected and self._pid == pid:
             return self._script
         self._close_agent()
         session = frida.attach(pid)
+        generation = self._generation + 1
+        session.on('detached', lambda reason, crash=None: self._agent_detached(session, pid, generation, reason, crash))
         script = None
         try:
             metadata = session.create_script('rpc.exports.modules = () => Process.enumerateModules().map(m => ({name:m.name,path:m.path}));')
@@ -82,6 +88,7 @@ class WetypeBackend(WechatBackend):
             finally:
                 metadata.unload()
             script = session.create_script((resource_dir() / 'wetype_agent.js').read_text(encoding='utf-8'))
+            script.on('message', lambda message, data: self._agent_message(pid, generation, message, data))
             script.load()
         except Exception:
             if script:
@@ -99,14 +106,16 @@ class WetypeBackend(WechatBackend):
         packets, frames = opus_packets(encoded)
         if frames != len(pcm) // 640:
             raise ProtocolError('编码后的帧数与输入音频不一致。')
-        voice_id = 'wt-api-' + uuid.uuid4().hex
+        owner = getattr(self._request_context, 'owner', None)
+        voice_id = owner or 'wt-api-' + uuid.uuid4().hex
         total_bytes = 0
         deadline = time.monotonic() + max(30, duration * 1.5 + 15)
 
         def submit(audio, sequence, end):
             if time.monotonic() > deadline:
                 raise BackendError('输入法未在时限内完成识别。', 504, 'recognition_timeout')
-            reply = script.exports_sync.request(list(request(voice_id, audio, sequence, total_bytes, end=end)))
+            payload = list(request(voice_id, audio, sequence, total_bytes, end=end))
+            reply = script.exports_sync.request(payload, owner) if owner else script.exports_sync.request(payload)
             if reply['code'] != 0:
                 raise BackendError('输入法语音网络请求失败。', 502, 'wetype_transport_error')
             return response(bytes(reply['data']), voice_id)
@@ -126,6 +135,7 @@ class WetypeBackend(WechatBackend):
             current = submit(b'', 0, True)
 
     def transcribe(self, data):
+        owner = 'wt-api-' + uuid.uuid4().hex
         script = session = None
         registered = False
         failure = None
@@ -133,22 +143,29 @@ class WetypeBackend(WechatBackend):
         try:
             pcm, duration = normalize_audio(data)
             with self.lock:
-                while self._active_requests:
+                pid = self._pid if self.agent_connected and not os.environ.get('WETYPE_PID') else discover_pid()
+                while self._active_requests and (self._pid != pid or self._session.is_detached):
                     if self._closing:
                         raise BackendError('服务正在停止。', code='server_stopping')
                     self.lock.wait()
                 if self._closing:
                     raise BackendError('服务正在停止。', code='server_stopping')
+                if self._unsafe_pid is not None and pid != self._unsafe_pid:
+                    self._unsafe_pid = None
+                    self.healthy = True
+                    self.last_error = None
+                if pid == self._unsafe_pid:
+                    raise BackendError('输入法连接意外断开，请退出输入法后重新启动。', code='agent_disconnected')
                 if self._session is not None and self._session.is_detached:
                     self._close_agent()
                     self.healthy = True
                 if not self.healthy:
                     raise BackendError('输入法原生回调尚未清理，已暂停后续调用。', code='cleanup_failed')
-                pid = self._pid if self.agent_connected and not os.environ.get('WETYPE_PID') else discover_pid()
                 script = self._ensure_agent(pid)
                 session = self._session
                 self._active_requests += 1
                 registered = True
+            self._request_context.owner = owner
             text, frames, encoded_bytes, completion = self._recognize(script, pcm, duration)
         except Exception as error:
             failure = error
@@ -156,7 +173,7 @@ class WetypeBackend(WechatBackend):
             if registered:
                 if not session.is_detached:
                     try:
-                        cleanup = script.exports_sync.finalize()
+                        cleanup = script.exports_sync.finalize(owner)
                     except Exception:
                         cleanup = {'cleaned': session.is_detached}
                 with self.lock:
@@ -164,21 +181,27 @@ class WetypeBackend(WechatBackend):
                         self.healthy = False
                         self.last_error = 'cleanup_failed'
                     self._active_requests -= 1
-                    if session.is_detached:
+                    if self._active_requests == 0 and session.is_detached:
                         self._close_agent()
-                        self.healthy = True
+                        if self._unsafe_pid != pid:
+                            self.healthy = True
                     self.lock.notify_all()
+            self._request_context.owner = None
         if not cleanup.get('cleaned'):
             raise BackendError('输入法原生回调清理未完成，已暂停后续调用。', 503, 'cleanup_failed')
         if failure:
-            self.last_error = failure.code if isinstance(failure, BackendError) else type(failure).__name__
+            with self.lock:
+                if self.healthy:
+                    self.last_error = failure.code if isinstance(failure, BackendError) else type(failure).__name__
             if isinstance(failure, BackendError):
                 raise failure
             if isinstance(failure, ProtocolError):
                 raise BackendError(str(failure), 502, 'wetype_protocol_error') from failure
             raise BackendError('输入法语音服务暂不可用，请确认输入法仍在运行。', code='wetype_unavailable') from failure
-        self.last_error = None
-        self.last_success = time.time()
-        self.last_completion = completion
+        with self.lock:
+            if self.healthy:
+                self.last_error = None
+            self.last_success = time.time()
+            self.last_completion = completion
         log.info('WeType recognition completed: seconds=%.3f completion=%s', duration, completion)
         return WetypeTranscription(text, duration, pid, frames, encoded_bytes, completion)

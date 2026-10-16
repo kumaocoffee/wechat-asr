@@ -1,4 +1,4 @@
-"""Local ASR bridge backed by a logged-in Weixin client."""
+"""Local ASR bridge with independent WeChat, WeType and Doubao routes."""
 import argparse
 import hmac
 import logging
@@ -11,20 +11,29 @@ from pathlib import Path
 import anyio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, FileResponse
 from starlette.datastructures import UploadFile
 from starlette.exceptions import HTTPException
 import uvicorn
 
 from backend import BackendError, MAX_BYTES, WechatBackend
-from app_paths import runtime_dir
+from app_paths import runtime_dir, resource_dir
+from bridge_config import BRIDGE_ID, PROVIDERS, validate_concurrency
+from bridge_pool import BackendPool
 
 MODELS = ('wechat-voice', 'whisper-1')
 MODEL_CREATED = int(time.time())
-app = FastAPI(title='WeChat ASR Bridge', version='1.0.0')
+app = FastAPI(title='ASR Bridge', version='0.3.0', docs_url=None, redoc_url=None)
 backend = WechatBackend()
 MAX_CONCURRENCY = 4
 gate = anyio.Semaphore(MAX_CONCURRENCY)
+worker_limit = anyio.CapacityLimiter(MAX_CONCURRENCY)
+pools = None
+
+
+@app.get('/docs', include_in_schema=False)
+async def documentation():
+    return FileResponse(resource_dir() / 'docs' / 'api.html', media_type='text/html')
 
 
 def error_response(message, status=400, code='invalid_request', param=None):
@@ -68,8 +77,12 @@ async def unexpected_error(request, error):
 
 
 def model_object(name):
+    selected = backend
+    if pools is not None:
+        key = 'wechat' if name == 'whisper-1' else next(k for k, p in PROVIDERS.items() if p['model'] == name)
+        selected = pools[key].backend
     return {'id': name, 'object': 'model', 'created': MODEL_CREATED,
-            'owned_by': getattr(backend, 'model_owner', 'wechat-local')}
+            'owned_by': getattr(selected, 'model_owner', 'wechat-local')}
 
 
 @app.get('/v1/models')
@@ -87,6 +100,16 @@ async def model(name: str):
 @app.get('/health')
 async def health():
     # Read-only; does not inject or submit an audio request.
+    if pools is not None:
+        states = [pool.snapshot() for pool in pools.values()]
+        return {'backend': BRIDGE_ID, 'status': 'ok' if all(s['status'] == 'ok' for s in states) else 'degraded',
+                'active_requests': sum(s['active_requests'] for s in states),
+                'queued_requests': sum(s['queued_requests'] for s in states),
+                'max_concurrency': sum(s['max_concurrency'] for s in states),
+                'busy': any(s['active_requests'] for s in states), 'pools': states,
+                'formats': ['json', 'text'], 'max_audio_seconds': None,
+                'last_error': next((s['last_error'] for s in states if s['last_error']), None),
+                'note': '健康检查不验证客户端登录或上游服务当前可用性'}
     return {'status': 'ok' if backend.healthy else 'degraded', 'busy': gate.value < MAX_CONCURRENCY,
             'active_requests': MAX_CONCURRENCY - gate.value, 'max_concurrency': MAX_CONCURRENCY,
             'queued_requests': gate.statistics().tasks_waiting,
@@ -145,44 +168,72 @@ async def transcriptions(request: Request):
         data = await audio.read(MAX_BYTES + 1)
         if len(data) > MAX_BYTES:
             return error_response('音频文件超过 25 MiB。', 413, 'file_too_large', 'file')
-        async with gate:
+        selected, selected_gate, selected_workers = backend, gate, worker_limit
+        if pools is not None:
+            key = 'wechat' if model == 'whisper-1' else next(k for k, p in PROVIDERS.items() if p['model'] == model)
+            pool = pools[key]
+            selected, selected_gate, selected_workers = pool.backend, pool.admit(), pool.workers
+        async with selected_gate:
             with anyio.CancelScope(shield=True):
-                result = await anyio.to_thread.run_sync(backend.transcribe, data, abandon_on_cancel=False)
+                result = await anyio.to_thread.run_sync(selected.transcribe, data, abandon_on_cancel=False, limiter=selected_workers)
         headers = {'x-wechat-audio-seconds': str(result.duration), 'x-wechat-session-cleaned': 'true'}
+        headers['x-asr-backend'] = getattr(selected, 'backend_id', 'wechat-4.1.13.65')
         if hasattr(result, 'completion'):
-            headers['x-asr-backend'] = backend.backend_id
             headers['x-asr-completion'] = result.completion
         if fmt == 'text':
             return PlainTextResponse(result.text, headers=headers)
         return JSONResponse({'text': result.text}, headers=headers)
 
 
-def configure_backend(name):
-    global backend, MODELS, MAX_CONCURRENCY, gate
-    if name == 'wetype':
+def configure_backend(name, concurrency=None):
+    global backend, MODELS, MAX_CONCURRENCY, gate, pools, worker_limit
+    capacities = validate_concurrency(concurrency)
+    pools = None
+    if name == 'all':
+        from wetype_backend import WetypeBackend
+        from doubao_backend import DoubaoBackend
+        backends = {'wechat': WechatBackend(), 'wetype': WetypeBackend(), 'doubao': DoubaoBackend()}
+        pools = {key: BackendPool(key, value, capacities[key]) for key, value in backends.items()}
+        backend = backends['wechat']
+        MODELS = tuple(p['model'] for p in PROVIDERS.values()) + ('whisper-1',)
+        MAX_CONCURRENCY = sum(capacities.values())
+        gate = anyio.Semaphore(MAX_CONCURRENCY)
+    elif name == 'wetype':
         from wetype_backend import WetypeBackend
         backend = WetypeBackend()
         MODELS = ('wetype-voice', 'whisper-1')
-        MAX_CONCURRENCY = 1
+        MAX_CONCURRENCY = capacities['wetype']
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     elif name == 'wechat':
         backend = WechatBackend()
         MODELS = ('wechat-voice', 'whisper-1')
-        MAX_CONCURRENCY = 4
+        MAX_CONCURRENCY = capacities['wechat']
+        gate = anyio.Semaphore(MAX_CONCURRENCY)
+    elif name == 'doubao':
+        from doubao_backend import DoubaoBackend
+        backend = DoubaoBackend()
+        MODELS = ('doubao-voice', 'whisper-1')
+        MAX_CONCURRENCY = capacities['doubao']
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     else:
         raise ValueError('Unknown backend')
+    worker_limit = anyio.CapacityLimiter(MAX_CONCURRENCY)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--backend', choices=('wechat', 'wetype'), default='wechat', help='ASR provider; wetype is experimental')
+    parser.add_argument('--backend', choices=('all', 'wechat', 'wetype', 'doubao'), default='all')
+    for key, settings in PROVIDERS.items():
+        parser.add_argument(f'--{key}-concurrency', type=int, default=settings['default'])
     parser.add_argument('--pid', type=int, help='Optional fixed native provider process PID')
     parser.add_argument('--shutdown-file', type=Path, help='Local graceful shutdown signal file')
     args = parser.parse_args(argv)
-    configure_backend(args.backend)
+    try:
+        configure_backend(args.backend, {key: getattr(args, key + '_concurrency') for key in PROVIDERS})
+    except ValueError as error:
+        parser.error(str(error))
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     if args.pid:
         os.environ['WETYPE_PID' if args.backend == 'wetype' else 'WECHAT_PID'] = str(args.pid)
@@ -207,14 +258,19 @@ def main(argv=None):
         controller.run()
     finally:
         finished.set()
-        while True:
-            try:
-                backend.close()
-                break
-            except BackendError:
-                logging.exception('Native cleanup is uncertain; retaining the agent until the target exits.')
-                while backend.agent_connected:
-                    time.sleep(0.5)
+        targets = [pool.backend for pool in pools.values()] if pools is not None else [backend]
+        for target in targets:
+            while True:
+                try:
+                    target.close()
+                    break
+                except BackendError:
+                    logging.exception('Native cleanup is uncertain; retaining the agent until the target exits.')
+                    while target.agent_connected:
+                        time.sleep(0.5)
+
+
+configure_backend('all')
 
 
 if __name__ == '__main__':

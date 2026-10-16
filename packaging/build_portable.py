@@ -34,7 +34,7 @@ def notices(folder):
              'No Weixin binaries or account data are included.', '']
     packages = ['frida', 'fastapi', 'starlette', 'uvicorn', 'anyio', 'imageio-ffmpeg',
                 'httpx', 'httpcore', 'h11', 'pydantic', 'pydantic-core', 'python-multipart',
-                'certifi', 'idna', 'typing-extensions', 'openai', 'pyinstaller', 'pystray', 'Pillow', 'six']
+                'certifi', 'idna', 'typing-extensions', 'openai', 'pyinstaller', 'pystray', 'Pillow', 'six', 'websocket-client']
     for name in packages:
         distribution = importlib.metadata.distribution(name)
         lines.append(f'{distribution.metadata["Name"]} {distribution.version}')

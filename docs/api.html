@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>接口文档 · ASR Bridge</title>
+  <style>
+    :root{color-scheme:light;--bg:#F3F5F7;--paper:#FFF;--ink:#20252B;--muted:#626A75;--line:#DDE1E6;--accent:#0067C0;--soft:#EAF2FC}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.7 "Segoe UI","Microsoft YaHei UI",sans-serif}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}header{background:var(--paper);border-bottom:1px solid var(--line);padding:21px max(24px,calc((100% - 1080px)/2));display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}header strong{font-size:17px;font-weight:500}header span{color:var(--muted);font-size:12px}.layout{max-width:1128px;margin:auto;padding:30px 24px 50px;display:grid;grid-template-columns:170px minmax(0,1fr);gap:30px}nav{align-self:start;position:sticky;top:24px;display:flex;flex-direction:column;gap:4px}nav span{font-size:12px;color:var(--muted);padding:0 10px 8px}nav a{display:block;padding:7px 10px;color:var(--muted);border-radius:4px}nav a:hover{background:var(--soft);color:var(--accent);text-decoration:none}main{min-width:0}h1{font-size:26px;font-weight:500;margin:0 0 6px}h2{font-size:18px;font-weight:500;margin:0 0 15px}h3{font-size:14px;font-weight:500;margin:18px 0 8px}p{margin:8px 0 13px}section{padding:23px 25px;background:var(--paper);border-radius:4px;margin:18px 0 0;scroll-margin-top:20px}.lead{color:var(--muted);font-size:13px;margin-bottom:22px}.route{display:flex;gap:9px;align-items:center;flex-wrap:wrap;margin-bottom:13px}.method{font:12px/1.5 Consolas,monospace;color:var(--accent);background:var(--soft);padding:3px 7px;border-radius:4px}.hint{color:var(--muted);font-size:12px}code{font:12px/1.6 Consolas,"Microsoft YaHei UI",monospace;overflow-wrap:anywhere}p code,td code{background:var(--bg);border-radius:3px;padding:2px 4px}.base{display:flex;align-items:center;gap:14px;background:var(--bg);padding:12px 14px;border-radius:4px;flex-wrap:wrap}.base span{color:var(--muted);font-size:12px}.base code{font-size:13px}table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}th{text-align:left;font-weight:400;color:var(--muted);padding:8px 0;border-bottom:1px solid var(--line)}td{padding:12px 12px 12px 0;vertical-align:top;border-bottom:1px solid var(--line);overflow-wrap:anywhere}td:last-child{padding-right:0}th:first-child{width:34%}td small{display:block;font-size:12px;color:var(--muted);margin-top:3px}.required{font-size:11px;color:var(--accent);margin-left:6px}pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0;padding:16px;background:var(--bg);border-radius:4px;font:12px/1.7 Consolas,"Microsoft YaHei UI",monospace}pre code{padding:0;background:transparent}button{font:12px "Microsoft YaHei UI",sans-serif;border:1px solid var(--line);border-radius:4px;background:var(--paper);color:var(--ink);padding:6px 10px;cursor:pointer}button:hover{background:var(--soft)}.code-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:15px}.code-title h3{margin:0}.notice{font-size:12px;color:var(--muted);border-left:2px solid var(--line);padding-left:12px;margin:16px 0}.status{font-size:12px;color:var(--muted);min-height:21px}footer{margin-top:22px;color:var(--muted);font-size:12px}
+    @media(max-width:720px){.layout{grid-template-columns:1fr;gap:16px;padding:20px 14px 35px}nav{position:static;flex-direction:row;flex-wrap:wrap;gap:4px}nav span{display:none}nav a{padding:4px 9px}section{padding:18px 15px}header{padding:17px 18px}h1{font-size:23px}th:first-child{width:40%}}
+  </style>
+</head>
+<body>
+  <header><strong>ASR Bridge <span>／ 接口文档</span></strong><span>OpenAI 兼容格式 · v0.3.0</span></header>
+  <div class="layout">
+    <nav aria-label="文档目录"><span>接口参考</span><a href="#start">快速接入</a><a href="#models">模型路由</a><a href="#parameters">请求参数</a><a href="#examples">调用示例</a><a href="#authentication">鉴权</a><a href="#responses">响应与错误</a><a href="#compatibility">兼容范围</a></nav>
+    <main>
+      <h1>音频转写接口</h1>
+      <p class="lead">统一接入微信、微信输入法和豆包语音，通过 model 指定后端。</p>
+      <section id="start"><h2>快速接入</h2><div class="base"><span>Base URL</span><code data-baseurl>http://127.0.0.1:8765/v1</code></div><p>将 OpenAI SDK 的 <code>base_url</code> 指向本机接口地址，再提交音频文件。</p><div class="route"><span class="method">POST</span><code>/v1/audio/transcriptions</code><span class="hint">multipart/form-data</span></div><p class="hint">默认启动三个独立并发池。实际可用模型以当前服务的 <code>GET /v1/models</code> 返回为准。</p></section>
+      <section id="models"><h2>模型路由</h2><table><thead><tr><th>model</th><th>调用后端</th></tr></thead><tbody><tr><td><code>wechat-voice</code></td><td>微信桌面端语音识别</td></tr><tr><td><code>wetype-voice</code></td><td>微信输入法语音识别</td></tr><tr><td><code>doubao-voice</code></td><td>豆包网页版语音识别</td></tr></tbody></table><p class="hint">这里的 model 是本地路由标识，不代表上游服务公开的模型名称或版本。统一服务中的 whisper-1 兼容别名指向微信。并发数在应用设置中配置，不作为转写请求参数传入。</p><div class="route"><span class="method">GET</span><code>/v1/models</code><span class="hint">查询当前服务可用模型</span></div></section>
+      <section id="parameters"><h2>请求参数</h2><table><thead><tr><th>参数 / 类型</th><th>说明</th></tr></thead><tbody><tr><td><code>file</code><span class="required">必填</span><small>file · 二进制</small></td><td>待转写的音频文件，最大 25 MiB。上传文件内容，不接受本地路径字符串或 URL。</td></tr><tr><td><code>model</code><span class="required">必填</span><small>string</small></td><td>使用上面的路由标识选择后端。服务未提供的标识返回参数错误。</td></tr><tr><td><code>response_format</code><small>string · 默认 json</small></td><td><code>json</code> 返回包含 <code>text</code> 的 JSON；<code>text</code> 返回 UTF-8 纯文本。</td></tr><tr><td><code>stream</code><small>boolean · 默认 false</small></td><td>仅接受 <code>false</code>，当前不提供流式响应。</td></tr><tr><td><code>temperature</code><small>number · 默认 0</small></td><td>仅接受 <code>0</code>。这是兼容参数，不影响上游语音模型。</td></tr></tbody></table><p class="hint">使用 SDK 或表单库时让库自动生成 multipart boundary，不要手动设置不完整的 Content-Type。</p></section>
+      <section id="examples"><h2>调用示例</h2><div class="code-title"><h3>Python · OpenAI SDK</h3><button type="button" data-copy="python-example">复制</button></div><pre id="python-example"><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:8765/v1",
+    api_key="local",
+)
+
+with open("audio.wav", "rb") as audio:
+    result = client.audio.transcriptions.create(
+        model="doubao-voice",
+        file=audio,
+        response_format="json",
+    )
+
+print(result.text)</code></pre><p class="hint">切换 model 即可指定其他后端。启用本地鉴权后，将 local 替换为设置中的 API Key。</p><div class="code-title"><h3>Windows PowerShell · curl.exe</h3><button type="button" data-copy="curl-example">复制</button></div><pre id="curl-example"><code>curl.exe "http://127.0.0.1:8765/v1/audio/transcriptions" `
+  -F "file=@audio.wav" `
+  -F "model=doubao-voice" `
+  -F "response_format=json"</code></pre><div class="status" aria-live="polite"></div></section>
+      <section id="authentication"><h2>鉴权</h2><p>默认仅在本机监听，未启用 API Key 时无需鉴权。OpenAI SDK 要求提供 <code>api_key</code>，此时可使用占位值 <code>local</code>。</p><p>启用本地 API Key 后，请在请求头传入：</p><pre><code>Authorization: Bearer &lt;本地 API Key&gt;</code></pre><p class="hint">本地 API Key 用于校验调用方，不用于选择识别后端，也不等同于微信或豆包的登录凭据。</p></section>
+      <section id="responses"><h2>响应与错误</h2><h3>JSON 成功响应</h3><pre><code>{
+  "text": "你好，这是语音识别接口测试。"
+}</code></pre><p><code>response_format=text</code> 时仅返回识别文字，Content-Type 为 <code>text/plain; charset=utf-8</code>。</p><h3>错误响应结构</h3><pre><code>{
+  "error": {
+    "message": "当前后端不支持流式响应。",
+    "type": "invalid_request_error",
+    "param": "stream",
+    "code": "invalid_request"
+  }
+}</code></pre><table><thead><tr><th>HTTP 状态</th><th>含义</th></tr></thead><tbody><tr><td><code>400</code></td><td>缺少参数、model 不可用，或传入未实现的参数。</td></tr><tr><td><code>401</code></td><td>已启用鉴权，但 API Key 缺失或错误。</td></tr><tr><td><code>413</code></td><td>上传文件超过大小限制。</td></tr><tr><td><code>500</code></td><td>内部调用失败。结合服务状态与日志排查。</td></tr></tbody></table><p class="hint">响应头中的 <code>x-request-id</code> 可用于定位请求。上游或客户端故障还可能返回其他错误码。</p></section>
+      <section id="compatibility"><h2>兼容范围</h2><p>支持音频转写的 <code>json</code>、<code>text</code> 响应，以及 <code>stream=false</code>、<code>temperature=0</code> 两个兼容默认值。</p><p><code>language</code>、<code>prompt</code>、流式结果、逐词时间戳、字幕和说话人分离暂不支持；未实现参数会返回 <code>400</code>。</p><div class="notice">本页说明本地桥接层的接口约定。可配置并发数不等于上游已验证的稳定并发能力。</div></section>
+      <footer>ASR Bridge · 本地接口参考</footer>
+    </main>
+  </div>
+  <script>
+    const params=new URLSearchParams(location.search);
+    const port=Number(params.get('port') || (location.protocol.startsWith('http') ? location.port : 8765));
+    if(Number.isInteger(port)&&port>0&&port<=65535){document.querySelector('[data-baseurl]').textContent=`http://127.0.0.1:${port}/v1`;for(const pre of document.querySelectorAll('pre'))pre.textContent=pre.textContent.replaceAll('127.0.0.1:8765',`127.0.0.1:${port}`);}
+    document.addEventListener('click',async event=>{const button=event.target.closest('button[data-copy]');if(!button)return;const status=document.querySelector('.status');try{await navigator.clipboard.writeText(document.getElementById(button.dataset.copy).textContent);status.textContent='已复制';}catch{status.textContent='请选中代码后复制。';}});
+  </script>
+</body>
+</html>

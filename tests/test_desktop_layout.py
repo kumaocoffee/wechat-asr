@@ -24,24 +24,31 @@ class DesktopLayoutTests(unittest.TestCase):
                             patch.object(desktop,'ServiceController',side_effect=lambda port:ServiceController(port,runtime=runtime)), \
                             patch.object(desktop,'health',return_value=None):
                         app=desktop.DesktopApplication(root)
-                    # Includes a path, as in the user's screenshot; the extra
-                    # filename lines must not consume the SDK/docs button row.
                     app._sample()
-                    app.detail.set('已连接现有服务 · 4/4 路识别\n此窗口不会停止其他程序启动的服务。')
+                    app.concurrency['wechat']=108
+                    app._show_health(app.controller, (None, False))
+                    self.assertEqual(len(app.pool_views['wechat']['canvas'].find_all()),108)
+                    self.assertEqual([app.notebook.tab(tab,'text') for tab in app.notebook.tabs()],['首页','手动转写'])
+                    with patch.object(desktop.webbrowser,'open') as browser:
+                        app._open_docs()
+                        self.assertTrue(browser.call_args.args[0].startswith('file:///'))
+                        self.assertIn('api.html?port=8765',browser.call_args.args[0])
+                        app.connected=True
+                        app._open_docs()
+                        self.assertEqual(browser.call_args.args[0],'http://127.0.0.1:8765/docs?port=8765')
+                        app.connected=False
+                    app.detail.set('已连接现有服务，此窗口不会停止它。')
                     app._update_buttons()
                     root.update_idletasks()
                     width,height=root.minsize()
-                    left=app.settings_button.master.master
-                    link_row=next(child for child in left.winfo_children()
-                                  if any(isinstance(button,app.ttk.Button) and button.cget('text')=='复制 SDK 地址'
-                                         for button in child.winfo_children()))
                     for window_width,window_height in ((width,height),(max(width,1080),height+300)):
                         root.geometry(f'{window_width}x{window_height}')
                         root.update_idletasks()
                         inspect_layout(app)
-                        gap=app.settings_button.winfo_rooty()-(link_row.winfo_rooty()+link_row.winfo_height())
-                        self.assertGreaterEqual(gap,0)
-                        self.assertLessEqual(gap,24,'The lower two button rows spread apart when the window grows')
+                        app.notebook.select(0)
+                        root.update()
+                        self.assertFalse(app.result.winfo_ismapped())
+                        self.assertTrue(app.pool_views['wechat']['canvas'].winfo_ismapped())
                     app.closed=True
                 finally:
                     for timer in root.tk.call('after','info'):

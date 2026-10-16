@@ -8,6 +8,7 @@ import sys
 import uuid
 
 from app_paths import runtime_dir
+from bridge_config import validate_concurrency
 
 
 def _crypt(data, *, protect):
@@ -68,11 +69,20 @@ def saved_api_key(runtime=None, default=''):
         raise ValueError('已保存的 API Key 无法解密，请在连接设置中重新填写。') from error
 
 
-def save_settings(port, api_key=None, runtime=None):
+def saved_concurrency(runtime=None):
+    try:
+        return validate_concurrency(_read(runtime).get('concurrency'))
+    except ValueError:
+        return validate_concurrency()
+
+
+def save_settings(port, api_key=None, runtime=None, *, concurrency=None):
     if isinstance(port, bool) or not 1 <= int(port) <= 65535:
         raise ValueError('端口必须介于 1 和 65535。')
     data = _read(runtime)
     data['port'] = int(port)
+    if concurrency is not None:
+        data['concurrency'] = validate_concurrency(concurrency)
     if api_key is not None:
         if not isinstance(api_key, str):
             raise ValueError('API Key 必须为文本。')

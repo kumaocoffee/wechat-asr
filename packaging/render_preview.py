@@ -19,6 +19,7 @@ def main():
     parser.add_argument('--width', type=int, default=1000)
     parser.add_argument('--height', type=int, default=720)
     parser.add_argument('--sample', action='store_true', help='Select bundled sample without inventing a recognition result')
+    parser.add_argument('--page', choices=['home', 'manual'], default='home')
     args = parser.parse_args()
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
@@ -46,6 +47,7 @@ def main():
         app.result.insert('1.0', '你好，这是微信语音接口测试，今天阳光很好')
         app.result.configure(state='disabled')
         app.result_status.set('识别完成 · 示例结果')
+    app.notebook.select(0 if args.page == 'home' else 1)
     root.update_idletasks()
     root.update()
     root.update_idletasks()

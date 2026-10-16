@@ -15,13 +15,13 @@ def inspect_layout(app):
     """Check real allocated rectangles, including every containing frame."""
     app.root.update()
     app.root.update_idletasks()
-    wanted = {'启动服务', '停止服务', '复制 SDK 地址', '接口文档',
-              '连接设置', '运行日志', '选择音频', '使用示例音频',
+    wanted = {'启动服务', '停止服务', '复制地址', '打开接口文档',
+              '设置', '运行日志', '选择音频', '使用示例音频',
               '开始识别', '复制文字', '另存为 TXT'}
     results = []
     def walk(widget):
         for child in widget.winfo_children():
-            if isinstance(child, app.ttk.Button) and child.cget('text') in wanted:
+            if isinstance(child, app.ttk.Button) and child.winfo_ismapped():
                 assert child.winfo_width() >= child.winfo_reqwidth(), ('width clipped', child.cget('text'))
                 assert child.winfo_height() >= child.winfo_reqheight(), ('height clipped', child.cget('text'))
                 current = child
@@ -31,11 +31,19 @@ def inspect_layout(app):
                     assert current.winfo_x() + current.winfo_width() <= parent.winfo_width(), ('parent width clipped', child.cget('text'),str(current),current.winfo_x(),current.winfo_width(),parent.winfo_width())
                     assert current.winfo_y() + current.winfo_height() <= parent.winfo_height(), ('parent height clipped', child.cget('text'),str(current),current.winfo_y(),current.winfo_height(),parent.winfo_height())
                     current = parent
-                results.append(dict(text=child.cget('text'),width=child.winfo_width(),height=child.winfo_height()))
+                if child.cget('text') in wanted:
+                    results.append(dict(text=child.cget('text'),width=child.winfo_width(),height=child.winfo_height()))
             walk(child)
-    walk(app.root)
+    selected = app.notebook.select()
+    for tab in app.notebook.tabs():
+        app.notebook.select(tab)
+        app.root.update()
+        app.root.update_idletasks()
+        walk(app.root)
+        if app.result.winfo_ismapped():
+            assert app.result.winfo_height() >= app.result.winfo_reqheight(), 'Result area clipped'
+    app.notebook.select(selected)
     assert {item['text'] for item in results} == wanted
-    assert app.result.winfo_height() >= app.result.winfo_reqheight(), 'Result area clipped'
     return dict(passed=True,window=[app.root.winfo_width(),app.root.winfo_height()],minimum=list(app.root.minsize()),controls=results)
 
 

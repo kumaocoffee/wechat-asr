@@ -148,6 +148,7 @@ class WetypeApiTests(unittest.TestCase):
         # A previous native Tk fixture can leave cycles; collect them on the
         # owning main thread before TestClient starts an ASGI worker thread.
         gc.collect()
+        server.configure_backend('wechat')
 
     def test_selected_provider_models_health_and_headers(self):
         state = server.backend, server.MODELS, server.MAX_CONCURRENCY, server.gate

@@ -15,6 +15,8 @@ from app_paths import resource_dir, runtime_dir
 from desktop_service import (ServiceController, VERSION, health, saved_port, save_port,
                              saved_api_key, save_settings, transcribe_file)
 from desktop_tray import TrayIcon
+from bridge_config import validate_concurrency
+from desktop_settings import saved_concurrency
 
 
 class DesktopApplication:
@@ -48,11 +50,14 @@ class DesktopApplication:
         self.api_key = tk.StringVar(value=key)
         self.applied_api_key = key
         self.status = tk.StringVar(value='正在检查服务…')
-        self.detail = tk.StringVar(value='请保持微信登录。')
+        self.detail = tk.StringVar(value='model 指定识别后端。')
         self.file_name = tk.StringVar(value='还没有选择音频')
         self.file_detail = tk.StringVar(value='选择 WAV、MP3 等音频，单文件最大 25 MiB。')
         self.result_status = tk.StringVar(value='选择音频后，点击开始识别。')
         self.endpoint = tk.StringVar(value=f'http://127.0.0.1:{port}')
+        self.concurrency = saved_concurrency(self.runtime)
+        self.concurrency_vars = {key: tk.StringVar(value=str(value)) for key, value in self.concurrency.items()}
+        self.model = tk.StringVar(value='doubao-voice')
         self._build()
         self.root.bind('<Configure>', lambda _: self._queue_layout_check(), add='+')
         self.root.after(100, self._drain_events)
@@ -62,129 +67,8 @@ class DesktopApplication:
             self.root.after(200, lambda: self._show_error(key_error))
 
     def _build(self):
-        tk, ttk, root = self.tk, self.ttk, self.root
-        self.colors = {'bg': '#EEF4F8', 'paper': '#FFFFFF', 'ink': '#18364A',
-                       'muted': '#607585', 'accent': '#137D78', 'line': '#DAE5EC'}
-        c = self.colors
-        root.title('微信语音接口 · WeChat ASR Bridge')
-        root.geometry('1000x720')
-        root.minsize(930, 680)
-        root.configure(bg=c['bg'])
-        icon = resource_dir() / 'assets' / 'app.ico'
-        if icon.exists():
-            root.iconbitmap(str(icon))
-        root.option_add('*Font', ('Microsoft YaHei UI', 10))
-        style = ttk.Style(root)
-        style.theme_use('clam')
-        style.configure('TButton', font=('Microsoft YaHei UI', 10), padding=(12, 9),
-                        background='#F1F6F9', foreground=c['ink'], borderwidth=0)
-        style.map('TButton', background=[('active', '#E3EDF3')], foreground=[('disabled', '#8B9BA7')])
-        style.configure('Accent.TButton', background=c['accent'], foreground='white')
-        style.map('Accent.TButton', background=[('active', '#106C67'), ('disabled', '#D4E3E8')],
-                  foreground=[('disabled', '#728591')])
-        style.configure('TEntry', padding=6, fieldbackground='white')
-        style.configure('TSpinbox', padding=6, fieldbackground='white')
-        style.configure('TProgressbar', background=c['accent'], troughcolor=c['bg'], borderwidth=0)
-        outer = tk.Frame(root, bg=c['bg'])
-        outer.pack(fill='both', expand=True, padx=28, pady=24)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(1, weight=1)
-        header = tk.Frame(outer, bg=c['bg'])
-        header.grid(row=0, column=0, sticky='ew', pady=(0, 20))
-        mark = tk.Canvas(header, width=44, height=44, bg=c['bg'], highlightthickness=0)
-        mark.pack(side='left', padx=(0, 12))
-        mark.create_rectangle(3, 3, 41, 36, fill=c['accent'], outline=c['accent'])
-        mark.create_polygon(12, 35, 12, 43, 23, 35, fill=c['accent'], outline=c['accent'])
-        for x, h in ((13, 12), (21, 22), (29, 16)):
-            mark.create_rectangle(x, 20-h/2, x+3, 20+h/2, fill='white', outline='white')
-        titles = tk.Frame(header, bg=c['bg'])
-        titles.pack(side='left')
-        tk.Label(titles, text='微信语音接口', font=('Microsoft YaHei UI', 21, 'bold'),
-                 bg=c['bg'], fg=c['ink']).pack(anchor='w')
-        tk.Label(titles, text='音频转文字，也能供 Screenpipe 和其他应用调用。',
-                 bg=c['bg'], fg=c['muted'], font=('Microsoft YaHei UI', 9)).pack(anchor='w', pady=(4, 0))
-        tk.Label(header, text=f'WeChat ASR Bridge\nv{VERSION} · Windows', justify='right',
-                 font=('Segoe UI', 9), bg=c['bg'], fg=c['muted']).pack(side='right')
-        body = tk.Frame(outer, bg=c['bg'])
-        body.grid(row=1, column=0, sticky='nsew')
-        body.columnconfigure(0, minsize=310)
-        body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
-        left = tk.Frame(body, bg=c['paper'], padx=22, pady=18)
-        left.grid(row=0, column=0, sticky='nsew', padx=(0, 18))
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(8, weight=1)
-        right = tk.Frame(body, bg=c['paper'], padx=24, pady=22)
-        right.grid(row=0, column=1, sticky='nsew')
-        self._label(left, '本机服务', 14, bold=True).grid(row=0, column=0, sticky='w')
-        self.state_label = self._label(left, '', 11, bold=True)
-        self.state_label.configure(textvariable=self.status)
-        self.state_label.grid(row=1, column=0, sticky='w', pady=(12, 4))
-        self._label(left, '', 9, variable=self.detail, wrap=270).grid(row=2, column=0, sticky='w')
-        slots = tk.Frame(left, bg=c['paper'])
-        slots.grid(row=3, column=0, sticky='ew', pady=(12, 6))
-        self.slots = []
-        for _ in range(4):
-            slot = tk.Label(slots, text='空闲', bg='#EAF2F6', fg=c['muted'],
-                            font=('Microsoft YaHei UI', 9), padx=8, pady=8)
-            slot.pack(side='left', expand=True, fill='x', padx=(0, 4))
-            self.slots.append(slot)
-        buttons = tk.Frame(left, bg=c['paper'])
-        buttons.grid(row=4, column=0, sticky='ew', pady=(12, 12))
-        self.start_button = ttk.Button(buttons, text='启动服务', command=self._start, style='Accent.TButton')
-        self.start_button.pack(side='left', expand=True, fill='x', padx=(0, 8))
-        self.stop_button = ttk.Button(buttons, text='停止服务', command=self._stop)
-        self.stop_button.pack(side='left', expand=True, fill='x')
-        tk.Frame(left, bg=c['line'], height=1).grid(row=5, column=0, sticky='ew', pady=(0, 12))
-        self._label(left, '接口地址', 10, bold=True).grid(row=6, column=0, sticky='w')
-        self._label(left, '', 10, variable=self.endpoint, mono=True).grid(row=7, column=0, sticky='w', pady=(8, 10))
-        links = tk.Frame(left, bg=c['paper'])
-        links.grid(row=8, column=0, sticky='sew')
-        ttk.Button(links, text='复制 SDK 地址', command=self._copy_endpoint).pack(side='left', padx=(0, 8))
-        ttk.Button(links, text='接口文档', command=self._open_docs).pack(side='left')
-        self.port_box = None
-        self.settings_window = None
-        bottom = tk.Frame(left, bg=c['paper'])
-        bottom.grid(row=10, column=0, sticky='ew', pady=(12, 0))
-        self.settings_button = ttk.Button(bottom, text='连接设置', command=self._settings)
-        self.settings_button.pack(side='left', fill='x', expand=True, padx=(0, 8))
-        ttk.Button(bottom, text='运行日志', command=self._open_logs).pack(side='left', fill='x', expand=True)
-        self._label(right, '音频识别', 14, bold=True).pack(anchor='w')
-        file_area = tk.Frame(right, bg='#F1F6F9', padx=16, pady=16)
-        file_area.pack(fill='x', pady=(16, 14))
-        self._label(file_area, '', 10, bold=True, variable=self.file_name, bg='#F1F6F9', wrap=450).pack(anchor='w')
-        self._label(file_area, '', 9, variable=self.file_detail, bg='#F1F6F9', wrap=450).pack(anchor='w', pady=(6, 0))
-        file_buttons = tk.Frame(right, bg=c['paper'])
-        file_buttons.pack(fill='x')
-        self.choose_button = ttk.Button(file_buttons, text='选择音频', command=self._choose_file)
-        self.choose_button.pack(side='left', padx=(0, 8))
-        self.sample_button = ttk.Button(file_buttons, text='使用示例音频', command=self._sample)
-        self.sample_button.pack(side='left')
-        self.recognize_button = ttk.Button(file_buttons, text='开始识别', command=self._recognize, style='Accent.TButton')
-        self.recognize_button.pack(side='right')
-        progress_row = tk.Frame(right, bg=c['paper'])
-        progress_row.pack(fill='x', pady=(18, 8))
-        self._label(progress_row, '', 9, variable=self.result_status, wrap=490).pack(anchor='w')
-        self.progress = ttk.Progressbar(right, mode='determinate', value=0)
-        self.progress.pack(fill='x', pady=(0, 12))
-        text_frame = tk.Frame(right, bg=c['line'], padx=1, pady=1)
-        text_frame.pack(fill='both', expand=True)
-        self.result = tk.Text(text_frame, wrap='word', state='disabled', bg='white', fg=c['ink'],
-                              font=('Microsoft YaHei UI', 11), padx=14, pady=14,
-                              relief='flat', borderwidth=0, height=4, width=30, undo=False)
-        scrollbar = ttk.Scrollbar(text_frame, command=self.result.yview)
-        scrollbar.pack(side='right', fill='y')
-        self.result.configure(yscrollcommand=scrollbar.set)
-        self.result.pack(fill='both', expand=True)
-        actions = tk.Frame(right, bg=c['paper'])
-        actions.pack(side='bottom', before=text_frame, fill='x', pady=(12, 0))
-        ttk.Button(actions, text='复制文字', command=self._copy_result).pack(side='left', padx=(0, 8))
-        ttk.Button(actions, text='另存为 TXT', command=self._save_result).pack(side='left')
-        footer = tk.Frame(outer, bg=c['bg'])
-        footer.grid(row=2, column=0, sticky='ew', pady=(16, 0))
-        self._label(footer, '需登录微信 4.1.13.65；音频通过微信发送到微信服务端。', 9, bg=c['bg']).pack(anchor='w')
-        self._label(footer, '关闭窗口后，已启动的服务继续在后台运行。', 9, bg=c['bg']).pack(anchor='w', pady=(4, 0))
-        self._update_buttons()
+        from desktop_ui import build
+        build(self)
 
     def _label(self, parent, text, size, *, bold=False, variable=None, wrap=None, mono=False, bg=None):
         label = self.tk.Label(parent, text=text, textvariable=variable,
@@ -243,46 +127,14 @@ class DesktopApplication:
                 current = health(controller.port)
                 return current, controller.owns_service() if current else False
             self._work(check, lambda result: self._show_health(controller, result), self._poll_error)
-        self.root.after(2500, self._poll)
+        self.root.after(750 if self.connected else 2500, self._poll)
 
     def _poll_error(self, message):
         self.polling = False
 
     def _show_health(self, controller, result):
-        self.polling = False
-        if controller is not self.controller or self.operation in ('starting', 'stopping'):
-            return
-        current, self.owned = result
-        self.connected = current is not None
-        failed = False
-        if current is None:
-            self.status.set('服务未启动')
-            self.detail.set('登录微信后，点击启动服务。')
-            active = 0
-        else:
-            active = int(current.get('active_requests', int(current.get('busy', False))))
-            queued = int(current.get('queued_requests', 0))
-            failed = bool(current.get('last_error') or current.get('status') != 'ok')
-            self.status.set('最近识别失败' if failed else '服务运行中')
-            if failed:
-                error = str(current.get('last_error') or '服务状态异常，请查看日志。')
-                friendly = {'cleanup_failed': '会话清理未完成，请退出微信后重新登录。',
-                            'agent_disconnected': '微信连接已中断，请退出微信后重新登录。',
-                            'recognition_timeout': '上次识别超时，可重试或查看日志。',
-                            'recognition_failed': '微信识别未成功，可重试或查看日志。'}
-                message = friendly.get(error, error)
-                self.detail.set(message if len(message) < 100 else '上次识别未成功，请确认微信已登录，或查看日志。')
-            elif self.owned:
-                self.detail.set(f'{active}/4 路识别 · {queued} 个请求排队')
-            else:
-                self.detail.set(f'已连接现有服务 · {active}/4 路识别\n此窗口不会停止其他程序启动的服务。')
-        self.state_label.configure(fg='#A03F39' if failed else self.colors['accent'] if self.connected else self.colors['ink'])
-        for index, slot in enumerate(self.slots):
-            occupied = index < active
-            slot.configure(text='识别中' if occupied else '空闲',
-                           bg=self.colors['accent'] if occupied else '#EAF2F6',
-                           fg='white' if occupied else self.colors['muted'])
-        self._update_buttons()
+        from desktop_ui import show_health
+        show_health(self, controller, result)
 
     def _update_buttons(self):
         idle = self.operation is None and not self.exit_requested
@@ -294,6 +146,7 @@ class DesktopApplication:
             button.configure(state='normal' if enabled else 'disabled')
         if self.port_box is not None and self.port_box.winfo_exists():
             self.port_box.configure(state='normal' if idle else 'disabled')
+        self.model_box.configure(state='readonly' if idle else 'disabled')
         self._queue_layout_check()
 
     def _queue_layout_check(self):
@@ -308,8 +161,8 @@ class DesktopApplication:
         # Font metrics depend on Windows DPI; a fixed 680px minimum can clip
         # the link buttons before the bottom actions. Keep all fixed controls
         # inside the client area and let only unused space/result text grow.
-        width = max(930, self.root.winfo_reqwidth())
-        height = max(680, self.root.winfo_reqheight())
+        width = max(820, self.root.winfo_reqwidth())
+        height = max(580, self.root.winfo_reqheight())
         if tuple(self.root.minsize()) != (width, height):
             self.root.minsize(width, height)
         current_width, current_height = self.root.winfo_width(), self.root.winfo_height()
@@ -317,26 +170,8 @@ class DesktopApplication:
             self.root.geometry(f'{max(current_width, width)}x{max(current_height, height)}')
 
     def _settings(self):
-        tk, ttk = self.tk, self.ttk
-        if self.settings_window is not None and self.settings_window.winfo_exists():
-            self.settings_window.lift()
-            return
-        window = tk.Toplevel(self.root)
-        self.settings_window = window
-        window.title('连接设置')
-        window.transient(self.root)
-        window.resizable(False, False)
-        panel = ttk.Frame(window, padding=24)
-        panel.pack(fill='both', expand=True)
-        ttk.Label(panel, text='本机接口端口').pack(anchor='w')
-        self.port_box = ttk.Spinbox(panel, from_=1024, to=65535, textvariable=self.port, width=28)
-        self.port_box.pack(fill='x', pady=(8, 16))
-        ttk.Label(panel, text='API Key（现有服务启用鉴权时填写）').pack(anchor='w')
-        ttk.Entry(panel, textvariable=self.api_key, show='•', width=28).pack(fill='x', pady=(8, 16))
-        def apply():
-            if self._apply_settings():
-                window.destroy()
-        ttk.Button(panel, text='应用设置', style='Accent.TButton', command=apply).pack(fill='x')
+        from desktop_ui import settings
+        settings(self)
 
     def _apply_settings(self):
         if self.operation or self.exit_requested:
@@ -345,14 +180,16 @@ class DesktopApplication:
         key = self.api_key.get()
         try:
             port = int(self.port.get())
+            capacities = validate_concurrency({key: int(value.get()) for key, value in self.concurrency_vars.items()})
             controller = old if port == old.port else ServiceController(port)
-            save_settings(port, key, self.runtime)
+            save_settings(port, key, self.runtime, concurrency=capacities)
         except (ValueError, OSError) as error:
             self._show_error(str(error))
             return False
-        changed = port != old.port or key != self.applied_api_key
+        changed = port != old.port or key != self.applied_api_key or capacities != self.concurrency
         restart = changed and self.connected and self.owned
         self.applied_api_key = key
+        self.concurrency = capacities
         self.controller = controller
         self.controllers[port] = controller
         self.endpoint.set(f'http://127.0.0.1:{port}')
@@ -364,7 +201,7 @@ class DesktopApplication:
             self.detail.set('等待已提交的识别与会话清理完成。')
             def restart_service():
                 old.stop()
-                return controller.start(api_key=key), controller.owns_service()
+                return controller.start(api_key=key, concurrency=capacities), controller.owns_service()
             def done(result):
                 self.operation = None
                 self._show_health(controller, result)
@@ -377,11 +214,13 @@ class DesktopApplication:
             return
         key = self.api_key.get()
         try:
-            save_settings(self.controller.port, key, self.runtime)
+            capacities = validate_concurrency({name: int(value.get()) for name, value in self.concurrency_vars.items()})
+            save_settings(self.controller.port, key, self.runtime, concurrency=capacities)
         except (ValueError, OSError) as error:
             self._show_error(str(error))
             return
         self.applied_api_key = key
+        self.concurrency = capacities
         self.operation = 'starting'
         self.status.set('正在启动服务…')
         self.detail.set('首次启动可能需要几秒钟。')
@@ -390,7 +229,7 @@ class DesktopApplication:
         def done(result):
             self.operation = None
             self._show_health(controller, result)
-        self._work(lambda: (controller.start(api_key=key), controller.owns_service()), done, self._operation_error)
+        self._work(lambda: (controller.start(api_key=key, concurrency=capacities), controller.owns_service()), done, self._operation_error)
 
     def _stop(self):
         self.operation = 'stopping'
@@ -433,12 +272,12 @@ class DesktopApplication:
         self._set_file(path)
 
     def _recognize(self):
-        port, api_key, path = self.controller.port, self.api_key.get(), self.audio_path
+        port, api_key, path, model = self.controller.port, self.api_key.get(), self.audio_path, self.model.get()
         if path is None:
             return
         self.operation = 'recognizing'
         self.started = time.monotonic()
-        self.result_status.set('正在识别，音频通过微信发送…')
+        self.result_status.set(f'正在识别 · {model}')
         self.progress.configure(mode='indeterminate')
         self.progress.start(14)
         self._update_buttons()
@@ -458,7 +297,7 @@ class DesktopApplication:
             self.progress.configure(mode='determinate', value=0)
             self.result_status.set('识别失败：' + message)
             self._update_buttons()
-        self._work(lambda: transcribe_file(path, port, api_key), done, failed)
+        self._work(lambda: transcribe_file(path, port, api_key, model), done, failed)
 
     def _copy(self, text):
         if text:
@@ -486,14 +325,17 @@ class DesktopApplication:
                 self._show_error(str(error))
 
     def _open_docs(self):
-        webbrowser.open(self.endpoint.get() + '/docs')
+        if self.connected:
+            webbrowser.open(self.endpoint.get() + '/docs?port=' + self.port.get())
+        else:
+            webbrowser.open((resource_dir() / 'docs' / 'api.html').as_uri() + '?port=' + self.port.get())
 
     def _open_logs(self):
         os.startfile(str(self.runtime))
 
     def _show_error(self, message):
         from tkinter import messagebox
-        messagebox.showerror('微信语音接口', message, parent=self.root)
+        messagebox.showerror('ASR Bridge', message, parent=self.root)
 
     def _close(self):
         if self.exit_requested or self.closed:
@@ -582,8 +424,14 @@ def self_test(output):
     import tkinter as tk
     import frida
     import imageio_ffmpeg
+    import websocket
+    import server
+    server.configure_backend('all')
     report = {'version': VERSION, 'frozen': bool(getattr(sys, 'frozen', False)),
-              'assets': (resource_dir() / 'agent.js').is_file(), 'frida': frida.__version__}
+              'assets': (resource_dir() / 'agent.js').is_file(), 'frida': frida.__version__,
+              'websocket': websocket.__version__, 'models': list(server.MODELS),
+              'wetype_assets': (resource_dir() / 'wetype_agent.js').is_file(),
+              'documentation': (resource_dir() / 'docs' / 'api.html').is_file()}
     root = tk.Tk()
     root.withdraw()
     report['tk'] = root.tk.call('info', 'patchlevel')
@@ -600,7 +448,7 @@ def self_test(output):
     result = subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), '-version'], capture_output=True,
                             timeout=10, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     report['ffmpeg'] = result.returncode == 0
-    report['passed'] = all(report[k] for k in ('assets', 'ffmpeg', 'gui', 'sample_audio', 'tray_backend', 'key_encryption'))
+    report['passed'] = all(report[k] for k in ('assets', 'wetype_assets', 'documentation', 'ffmpeg', 'gui', 'sample_audio', 'tray_backend', 'key_encryption'))
     Path(output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
     return 0 if report['passed'] else 1
 

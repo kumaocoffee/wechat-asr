@@ -13,9 +13,10 @@ import uuid
 
 from app_paths import resource_dir, runtime_dir
 from desktop_settings import saved_port, save_port, saved_api_key, save_settings
+from bridge_config import BRIDGE_ID, validate_concurrency
 
-APP_BACKEND = 'wechat-4.1.13.65'
-VERSION = '0.2.3'
+APP_BACKEND = BRIDGE_ID
+VERSION = '0.3.0'
 MAX_UPLOAD = 25 * 1024 * 1024
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
@@ -94,7 +95,8 @@ class ServiceController:
             return (executable_matches and '--serve' in command and '--shutdown-file' in command
                     and metadata['shutdown_file'] in command)
 
-    def start(self, api_key=None):
+    def start(self, api_key=None, concurrency=None):
+        capacities = validate_concurrency(concurrency)
         with self._lock:
             current = health(self.port)
             if current:
@@ -106,6 +108,9 @@ class ServiceController:
             if not self.frozen:
                 command.append(str(resource_dir() / 'desktop.py'))
             command += ['--serve', '--port', str(self.port), '--shutdown-file', str(signal)]
+            command += ['--backend', 'all']
+            for key, capacity in capacities.items():
+                command += [f'--{key}-concurrency', str(capacity)]
             environment = os.environ.copy()
             if api_key is not None:
                 if api_key:
@@ -146,7 +151,7 @@ class ServiceController:
         raise RuntimeError('正在等待识别和会话清理完成；服务未被强行终止。')
 
 
-def transcribe_file(path, port=8765, api_key='wechat-local'):
+def transcribe_file(path, port=8765, api_key='wechat-local', model='wechat-voice'):
     import httpx
     path = Path(path)
     if not path.is_file():
@@ -156,7 +161,7 @@ def transcribe_file(path, port=8765, api_key='wechat-local'):
     try:
         with httpx.Client(timeout=180, trust_env=False) as client, path.open('rb') as audio:
             response = client.post(f'http://127.0.0.1:{port}/v1/audio/transcriptions',
-                                   data={'model': 'wechat-voice'},
+                                   data={'model': model},
                                    files={'file': (path.name, audio, 'application/octet-stream')},
                                    headers={'Authorization': 'Bearer ' + (api_key or 'wechat-local')})
     except httpx.TimeoutException as error:
