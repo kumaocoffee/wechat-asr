@@ -99,6 +99,8 @@ def normalize_audio(data):
 
 
 class WechatBackend:
+    display_name = '微信'
+
     def __init__(self):
         self.lock = threading.Condition(threading.RLock())
         self._active_requests = 0
@@ -200,7 +202,7 @@ class WechatBackend:
             if not result.get('cleaned'):
                 self.healthy = False
                 self.last_error = 'cleanup_failed'
-                raise BackendError('微信会话尚未安全清理，保留 agent 并暂停调用。', code='cleanup_failed')
+                raise BackendError(f'{self.display_name}会话尚未安全清理，保留 agent 并暂停调用。', code='cleanup_failed')
             self._expected_detach = True
             try:
                 script.unload()

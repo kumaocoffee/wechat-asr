@@ -64,11 +64,12 @@ async def validation_error(request, error):
 
 @app.exception_handler(Exception)
 async def unexpected_error(request, error):
-    return error_response('内部调用失败，请查看服务状态并确认微信仍在运行。', 500, 'internal_error')
+    return error_response('内部调用失败，请查看服务状态并确认目标客户端仍在运行。', 500, 'internal_error')
 
 
 def model_object(name):
-    return {'id': name, 'object': 'model', 'created': MODEL_CREATED, 'owned_by': 'wechat-local'}
+    return {'id': name, 'object': 'model', 'created': MODEL_CREATED,
+            'owned_by': getattr(backend, 'model_owner', 'wechat-local')}
 
 
 @app.get('/v1/models')
@@ -92,16 +93,17 @@ async def health():
             'last_pid': backend.last_pid, 'last_success': backend.last_success,
             'agent_connected': backend.agent_connected,
             'agent_generation': backend.agent_generation,
-            'backend': 'wechat-4.1.13.65', 'formats': ['json', 'text'],
+            'backend': getattr(backend, 'backend_id', 'wechat-4.1.13.65'), 'formats': ['json', 'text'],
             'max_audio_seconds': None, 'last_error': backend.last_error,
-            'note': '健康检查不等于当前微信登录状态验证'}
+            'completion': getattr(backend, 'last_completion', None),
+            'note': '健康检查不等于原生识别能力验证'}
 
 
 @app.post('/v1/audio/transcriptions', openapi_extra={
     'requestBody': {'required': True, 'content': {'multipart/form-data': {'schema': {
         'type': 'object', 'required': ['file', 'model'], 'properties': {
             'file': {'type': 'string', 'format': 'binary'},
-            'model': {'type': 'string', 'enum': list(MODELS), 'default': 'whisper-1'},
+            'model': {'type': 'string', 'description': '可用模型别名见 /v1/models', 'default': 'whisper-1'},
             'response_format': {'type': 'string', 'enum': ['json', 'text'], 'default': 'json'},
             'temperature': {'type': 'number', 'enum': [0], 'default': 0},
             'stream': {'type': 'boolean', 'enum': [False], 'default': False},
@@ -124,20 +126,20 @@ async def transcriptions(request: Request):
             return error_response('缺少 file 音频文件。', param='file')
         model = form.get('model')
         if model not in MODELS:
-            return error_response('model 必须为 wechat-voice 或 whisper-1（兼容别名）。', param='model')
+            return error_response('model 必须为 ' + ' 或 '.join(MODELS) + '（兼容别名）。', param='model')
         fmt = form.get('response_format', 'json')
         if fmt not in ('json', 'text'):
             return error_response('当前后端仅支持 json 和 text，无逐词时间戳或说话人分离。', param='response_format')
         allowed = {'file', 'model', 'response_format', 'stream', 'temperature'}
         for key in form:
             if key not in allowed:
-                return error_response(f'微信后端尚不支持参数 {key}。', param=key)
+                return error_response(f'当前后端尚不支持参数 {key}。', param=key)
         if str(form.get('stream', 'false')).lower() not in ('false', '0', ''):
             return error_response('当前后端不支持流式响应。', param='stream')
         if 'temperature' in form:
             try:
                 if float(form['temperature']) != 0:
-                    return error_response('微信后端不支持调整 temperature。', param='temperature')
+                    return error_response('当前后端不支持调整 temperature。', param='temperature')
             except (ValueError, TypeError):
                 return error_response('temperature 不正确。', param='temperature')
         data = await audio.read(MAX_BYTES + 1)
@@ -147,21 +149,43 @@ async def transcriptions(request: Request):
             with anyio.CancelScope(shield=True):
                 result = await anyio.to_thread.run_sync(backend.transcribe, data, abandon_on_cancel=False)
         headers = {'x-wechat-audio-seconds': str(result.duration), 'x-wechat-session-cleaned': 'true'}
+        if hasattr(result, 'completion'):
+            headers['x-asr-backend'] = backend.backend_id
+            headers['x-asr-completion'] = result.completion
         if fmt == 'text':
             return PlainTextResponse(result.text, headers=headers)
         return JSONResponse({'text': result.text}, headers=headers)
+
+
+def configure_backend(name):
+    global backend, MODELS, MAX_CONCURRENCY, gate
+    if name == 'wetype':
+        from wetype_backend import WetypeBackend
+        backend = WetypeBackend()
+        MODELS = ('wetype-voice', 'whisper-1')
+        MAX_CONCURRENCY = 1
+        gate = anyio.Semaphore(MAX_CONCURRENCY)
+    elif name == 'wechat':
+        backend = WechatBackend()
+        MODELS = ('wechat-voice', 'whisper-1')
+        MAX_CONCURRENCY = 4
+        gate = anyio.Semaphore(MAX_CONCURRENCY)
+    else:
+        raise ValueError('Unknown backend')
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8765)
-    parser.add_argument('--pid', type=int, help='Optional fixed Weixin main process PID')
+    parser.add_argument('--backend', choices=('wechat', 'wetype'), default='wechat', help='ASR provider; wetype is experimental')
+    parser.add_argument('--pid', type=int, help='Optional fixed native provider process PID')
     parser.add_argument('--shutdown-file', type=Path, help='Local graceful shutdown signal file')
     args = parser.parse_args(argv)
+    configure_backend(args.backend)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
     if args.pid:
-        os.environ['WECHAT_PID'] = str(args.pid)
+        os.environ['WETYPE_PID' if args.backend == 'wetype' else 'WECHAT_PID'] = str(args.pid)
     if args.host not in ('127.0.0.1', 'localhost', '::1') and not os.environ.get('WECHAT_API_KEY'):
         parser.error('非本机监听地址需要先设置 WECHAT_API_KEY。')
     # Concurrent requests share one agent; separate workers cannot coordinate
@@ -188,7 +212,7 @@ def main(argv=None):
                 backend.close()
                 break
             except BackendError:
-                logging.exception('Native cleanup is uncertain; retaining the agent until Weixin exits.')
+                logging.exception('Native cleanup is uncertain; retaining the agent until the target exits.')
                 while backend.agent_connected:
                     time.sleep(0.5)
 
