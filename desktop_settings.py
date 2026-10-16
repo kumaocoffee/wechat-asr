@@ -76,10 +76,27 @@ def saved_concurrency(runtime=None):
         return validate_concurrency()
 
 
-def save_settings(port, api_key=None, runtime=None, *, concurrency=None):
+def saved_auth_enabled(runtime=None, default=False):
+    data = _read(runtime)
+    if isinstance(data.get('auth_enabled'), bool):
+        return data['auth_enabled']
+    # Existing installations enabled auth by saving a nonempty key. Preserve
+    # that protection when migrating to the explicit switch.
+    if 'api_key_dpapi' in data:
+        return bool(saved_api_key(runtime))
+    return default
+
+
+def save_settings(port, api_key=None, runtime=None, *, concurrency=None, auth_enabled=None):
     if isinstance(port, bool) or not 1 <= int(port) <= 65535:
         raise ValueError('端口必须介于 1 和 65535。')
     data = _read(runtime)
+    if auth_enabled is not None:
+        if not isinstance(auth_enabled, bool):
+            raise ValueError('鉴权开关必须为布尔值。')
+        if auth_enabled and not (api_key if api_key is not None else saved_api_key(runtime)).strip():
+            raise ValueError('启用鉴权时需要填写 API Key。')
+        data['auth_enabled'] = auth_enabled
     data['port'] = int(port)
     if concurrency is not None:
         data['concurrency'] = validate_concurrency(concurrency)

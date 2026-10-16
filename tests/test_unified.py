@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from backend import BackendError, Transcription
 from bridge_config import validate_concurrency
-from desktop_settings import save_settings, saved_concurrency
+from desktop_settings import save_settings, saved_concurrency, saved_auth_enabled, saved_api_key
 from wetype_backend import WetypeBackend
 import doubao_backend
 import server
@@ -24,10 +24,10 @@ class UnifiedApiTests(unittest.TestCase):
         self.addCleanup(server.configure_backend, 'wechat')
         self.client=TestClient(server.app)
 
-    def test_model_routes_are_independent_and_alias_is_wechat(self):
-        expected=['wechat-voice','wetype-voice','doubao-voice','whisper-1']
+    def test_model_routes_are_independent(self):
+        expected=['wechat-voice','wetype-voice','doubao-voice']
         self.assertEqual([m['id'] for m in self.client.get('/v1/models').json()['data']],expected)
-        for name,key in zip(expected,['wechat','wetype','doubao','wechat']):
+        for name,key in zip(expected,['wechat','wetype','doubao']):
             with self.subTest(model=name), patch.object(server.pools[key].backend,'transcribe',return_value=Transcription(key,1,0,1,1)) as call:
                 response=self.client.post('/v1/audio/transcriptions',data={'model':name},files={'file':('test.wav',b'audio')})
                 self.assertEqual(response.json(),{'text':key})
@@ -53,44 +53,122 @@ class UnifiedApiTests(unittest.TestCase):
             self.assertIn(value,result.text)
         self.assertIn('text/html',result.headers['content-type'])
 
-    def test_pool_above_40_has_no_shared_worker_ceiling_and_isolates_queue(self):
-        server.configure_backend('all',{'wechat':42,'wetype':2,'doubao':1})
+    def test_removed_alias_and_missing_model_are_rejected(self):
+        self.assertEqual(self.client.get('/v1/models/whisper-1').status_code,404)
+        for fields in ({'model':'whisper-1'}, {}):
+            response=self.client.post('/v1/audio/transcriptions',data=fields,files={'file':('x.wav',b'a')})
+            self.assertEqual(response.status_code,400)
+        schema=self.client.get('/openapi.json').json()['paths']['/v1/audio/transcriptions']['post']
+        model=schema['requestBody']['content']['multipart/form-data']['schema']['properties']['model']
+        self.assertNotIn('default',model)
+
+    def test_arbitrary_authorization_is_ignored_when_auth_is_disabled(self):
+        with patch.dict('os.environ', {'WECHAT_API_KEY':''}), patch.object(
+                server.pools['wechat'].backend,'transcribe',return_value=Transcription('ok',1,0,1,1)):
+            for header in (None,'Bearer anything','Basic arbitrary','', 'Bearer sk-client-placeholder'):
+                headers={} if header is None else {'Authorization':header}
+                self.assertEqual(self.client.get('/v1/models',headers=headers).status_code,200)
+                result=self.client.post('/v1/audio/transcriptions',headers=headers,
+                    data={'model':'wechat-voice'},files={'file':('x.wav',b'a')})
+                self.assertEqual(result.json(),{'text':'ok'})
+
+    def test_default_capacities_and_true_shared_limit(self):
+        self.assertEqual(validate_concurrency(),dict.fromkeys(('wechat','wetype','doubao'),4))
+        self._exercise_limit(None, ['wechat-voice']*4+['wetype-voice']*4+['doubao-voice']*4,8,4)
+
+    def test_custom_provider_capacity_cannot_bypass_shared_limit(self):
+        self._exercise_limit({'wechat':42,'wetype':2,'doubao':1}, ['wechat-voice']*10,8,2)
+
+    def _exercise_limit(self, capacities, models, active, queued):
+        server.configure_backend('all',capacities)
         release=threading.Event()
+        def slow(data):
+            if not release.wait(10):
+                raise RuntimeError('offline release timeout')
+            return Transcription('ok',1,0,1,1)
         async def run():
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app),base_url='http://test') as client:
-                async def post(model):
-                    return await client.post('/v1/audio/transcriptions',data={'model':model},files={'file':('x.wav',b'a')})
-                tasks=[asyncio.create_task(post('wechat-voice')) for _ in range(44)]
+                tasks=[asyncio.create_task(client.post('/v1/audio/transcriptions',data={'model':model},
+                       files={'file':('x.wav',b'a')})) for model in models]
                 try:
                     for _ in range(300):
                         data=(await client.get('/health')).json()
-                        wx=data['pools'][0]
-                        if wx['active_requests']==42 and wx['queued_requests']==2:
+                        self.assertLessEqual(data['active_requests'],8)
+                        if data['active_requests']==active and data['queued_requests']==queued:
                             break
                         await asyncio.sleep(.01)
-                    else:
-                        self.fail('42 native workers did not enter concurrently')
-                    self.assertEqual(wx['occupied_slots'],list(range(42)))
-                    response=await asyncio.wait_for(post('doubao-voice'),3)
-                    self.assertEqual(response.json(),{'text':'doubao'})
-                    self.assertEqual(data['pools'][1]['queued_requests'],0)
+                    else:self.fail('admission did not reach expected running and queued counts')
+                    self.assertEqual(data['max_concurrency'],8)
+                    for pool in data['pools']:
+                        self.assertLessEqual(pool['active_requests'],pool['max_concurrency'])
+                        self.assertEqual(len(pool['occupied_slots']),pool['active_requests'])
                 finally:
                     release.set()
                     results=await asyncio.gather(*tasks)
                 self.assertTrue(all(r.status_code==200 for r in results))
-                states=(await client.get('/health')).json()
-                self.assertEqual(states['active_requests'],0)
-                self.assertEqual(states['queued_requests'],0)
-        def slow(data):
-            if not release.wait(10):
-                raise RuntimeError('offline release timeout')
-            return Transcription('wechat',1,0,1,1)
+                data=(await client.get('/health')).json()
+                self.assertEqual((data['active_requests'],data['queued_requests']),(0,0))
         with patch.object(server.pools['wechat'].backend,'transcribe',side_effect=slow), \
-             patch.object(server.pools['doubao'].backend,'transcribe',return_value=Transcription('doubao',1,0,1,1)):
+             patch.object(server.pools['wetype'].backend,'transcribe',side_effect=slow), \
+             patch.object(server.pools['doubao'].backend,'transcribe',side_effect=slow):
             asyncio.run(run())
+
+    def test_local_queue_does_not_reserve_global_capacity_and_cancellation_cleans_waiters(self):
+        import anyio
+        from bridge_pool import BackendPool
+        async def run():
+            gate=anyio.Semaphore(8)
+            pools={key:BackendPool(key,MagicMock(),4,gate) for key in ('wechat','wetype','doubao')}
+            release=asyncio.Event()
+            async def hold(pool):
+                async with pool.admit():await release.wait()
+            async def wait_for(predicate):
+                for _ in range(300):
+                    if predicate():return
+                    await asyncio.sleep(.005)
+                self.fail('pool wait timed out')
+            tasks=[asyncio.create_task(hold(pools['wechat'])) for _ in range(5)]
+            try:
+                await wait_for(lambda:len(pools['wechat'].occupied)==4 and pools['wechat'].waiting==1)
+                # A local waiter must leave the other four global slots free.
+                self.assertEqual(gate.value,4)
+                tasks.extend(asyncio.create_task(hold(pools['wetype'])) for _ in range(4))
+                await wait_for(lambda:len(pools['wetype'].occupied)==4)
+                waiter=asyncio.create_task(hold(pools['doubao']))
+                tasks.append(waiter)
+                await wait_for(lambda:pools['doubao'].waiting==1)
+                waiter.cancel()
+                await asyncio.gather(waiter,return_exceptions=True)
+                self.assertEqual(pools['doubao'].waiting,0)
+                self.assertEqual(pools['doubao'].gate.value,4)
+                self.assertEqual(gate.value,0)
+            finally:
+                release.set()
+                await asyncio.gather(*tasks,return_exceptions=True)
+            self.assertEqual(gate.value,8)
+            for pool in pools.values():
+                self.assertEqual((pool.waiting,pool.occupied),(0,set()))
+                async with pool.admit():self.assertEqual(len(pool.occupied),1)
+        asyncio.run(run())
 
 
 class SettingsTests(unittest.TestCase):
+    def test_auth_switch_preserves_legacy_protection_and_allows_unused_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertFalse(saved_auth_enabled(directory))
+            save_settings(18765,'legacy-key',directory)
+            self.assertTrue(saved_auth_enabled(directory))
+            save_settings(18765,'arbitrary-unused-key',directory,auth_enabled=False)
+            self.assertFalse(saved_auth_enabled(directory))
+            self.assertEqual(saved_api_key(directory),'arbitrary-unused-key')
+            target=Path(directory)/'desktop-settings.json'
+            before=target.read_bytes()
+            with self.assertRaises(ValueError):
+                save_settings(18765,'',directory,auth_enabled=True)
+            self.assertEqual(target.read_bytes(),before)
+            save_settings(18765,'real-key',directory,auth_enabled=True)
+            self.assertTrue(saved_auth_enabled(directory))
+
     def test_large_capacity_persists_and_invalid_change_is_atomic(self):
         with tempfile.TemporaryDirectory() as directory:
             capacities={'wechat':108,'wetype':64,'doubao':33}

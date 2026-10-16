@@ -16,7 +16,7 @@ from desktop_settings import saved_port, save_port, saved_api_key, save_settings
 from bridge_config import BRIDGE_ID, validate_concurrency
 
 APP_BACKEND = BRIDGE_ID
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 MAX_UPLOAD = 25 * 1024 * 1024
 NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 

@@ -26,7 +26,7 @@ def main():
     def transcribe():
         with (root / 'tests' / 'fixtures' / 'test.wav').open('rb') as audio:
             barrier.wait(timeout=10)
-            return client.audio.transcriptions.create(model='whisper-1', file=audio).text
+            return client.audio.transcriptions.create(model='wechat-voice', file=audio).text
     with ThreadPoolExecutor(max_workers=2) as executor:
         requests = [executor.submit(transcribe) for _ in range(2)]
         for _ in range(100):

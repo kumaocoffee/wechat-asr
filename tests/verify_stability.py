@@ -26,7 +26,7 @@ def main():
         identity = None
         for i in range(args.requests):
             with (root / 'tests' / 'fixtures' / 'test.wav').open('rb') as audio:
-                result = client.audio.transcriptions.create(model='whisper-1', file=audio)
+                result = client.audio.transcriptions.create(model='wechat-voice', file=audio)
             assert result.text == '你好，这是微信语音接口测试，今天阳光很好', f'Unexpected text at call {i + 1}'
             health = probe.get(base + '/health').json()
             assert health['agent_connected'] and not health['busy'], health

@@ -18,12 +18,12 @@ import uvicorn
 
 from backend import BackendError, MAX_BYTES, WechatBackend
 from app_paths import runtime_dir, resource_dir
-from bridge_config import BRIDGE_ID, PROVIDERS, validate_concurrency
+from bridge_config import BRIDGE_ID, PROVIDERS, GLOBAL_MAX_CONCURRENCY, validate_concurrency
 from bridge_pool import BackendPool
 
-MODELS = ('wechat-voice', 'whisper-1')
+MODELS = ('wechat-voice',)
 MODEL_CREATED = int(time.time())
-app = FastAPI(title='ASR Bridge', version='0.3.0', docs_url=None, redoc_url=None)
+app = FastAPI(title='ASR Bridge', version='0.3.1', docs_url=None, redoc_url=None)
 backend = WechatBackend()
 MAX_CONCURRENCY = 4
 gate = anyio.Semaphore(MAX_CONCURRENCY)
@@ -79,7 +79,7 @@ async def unexpected_error(request, error):
 def model_object(name):
     selected = backend
     if pools is not None:
-        key = 'wechat' if name == 'whisper-1' else next(k for k, p in PROVIDERS.items() if p['model'] == name)
+        key = next(k for k, p in PROVIDERS.items() if p['model'] == name)
         selected = pools[key].backend
     return {'id': name, 'object': 'model', 'created': MODEL_CREATED,
             'owned_by': getattr(selected, 'model_owner', 'wechat-local')}
@@ -105,7 +105,7 @@ async def health():
         return {'backend': BRIDGE_ID, 'status': 'ok' if all(s['status'] == 'ok' for s in states) else 'degraded',
                 'active_requests': sum(s['active_requests'] for s in states),
                 'queued_requests': sum(s['queued_requests'] for s in states),
-                'max_concurrency': sum(s['max_concurrency'] for s in states),
+                'max_concurrency': GLOBAL_MAX_CONCURRENCY,
                 'busy': any(s['active_requests'] for s in states), 'pools': states,
                 'formats': ['json', 'text'], 'max_audio_seconds': None,
                 'last_error': next((s['last_error'] for s in states if s['last_error']), None),
@@ -126,7 +126,7 @@ async def health():
     'requestBody': {'required': True, 'content': {'multipart/form-data': {'schema': {
         'type': 'object', 'required': ['file', 'model'], 'properties': {
             'file': {'type': 'string', 'format': 'binary'},
-            'model': {'type': 'string', 'description': '可用模型别名见 /v1/models', 'default': 'whisper-1'},
+            'model': {'type': 'string', 'description': '必须填写 /v1/models 返回的模型名称', 'enum': [p['model'] for p in PROVIDERS.values()]},
             'response_format': {'type': 'string', 'enum': ['json', 'text'], 'default': 'json'},
             'temperature': {'type': 'number', 'enum': [0], 'default': 0},
             'stream': {'type': 'boolean', 'enum': [False], 'default': False},
@@ -149,7 +149,7 @@ async def transcriptions(request: Request):
             return error_response('缺少 file 音频文件。', param='file')
         model = form.get('model')
         if model not in MODELS:
-            return error_response('model 必须为 ' + ' 或 '.join(MODELS) + '（兼容别名）。', param='model')
+            return error_response('model 必须为 ' + ' 或 '.join(MODELS) + '。', param='model')
         fmt = form.get('response_format', 'json')
         if fmt not in ('json', 'text'):
             return error_response('当前后端仅支持 json 和 text，无逐词时间戳或说话人分离。', param='response_format')
@@ -170,7 +170,7 @@ async def transcriptions(request: Request):
             return error_response('音频文件超过 25 MiB。', 413, 'file_too_large', 'file')
         selected, selected_gate, selected_workers = backend, gate, worker_limit
         if pools is not None:
-            key = 'wechat' if model == 'whisper-1' else next(k for k, p in PROVIDERS.items() if p['model'] == model)
+            key = next(k for k, p in PROVIDERS.items() if p['model'] == model)
             pool = pools[key]
             selected, selected_gate, selected_workers = pool.backend, pool.admit(), pool.workers
         async with selected_gate:
@@ -193,27 +193,27 @@ def configure_backend(name, concurrency=None):
         from wetype_backend import WetypeBackend
         from doubao_backend import DoubaoBackend
         backends = {'wechat': WechatBackend(), 'wetype': WetypeBackend(), 'doubao': DoubaoBackend()}
-        pools = {key: BackendPool(key, value, capacities[key]) for key, value in backends.items()}
+        gate = anyio.Semaphore(GLOBAL_MAX_CONCURRENCY)
+        pools = {key: BackendPool(key, value, capacities[key], gate) for key, value in backends.items()}
         backend = backends['wechat']
-        MODELS = tuple(p['model'] for p in PROVIDERS.values()) + ('whisper-1',)
-        MAX_CONCURRENCY = sum(capacities.values())
-        gate = anyio.Semaphore(MAX_CONCURRENCY)
+        MODELS = tuple(p['model'] for p in PROVIDERS.values())
+        MAX_CONCURRENCY = GLOBAL_MAX_CONCURRENCY
     elif name == 'wetype':
         from wetype_backend import WetypeBackend
         backend = WetypeBackend()
-        MODELS = ('wetype-voice', 'whisper-1')
-        MAX_CONCURRENCY = capacities['wetype']
+        MODELS = ('wetype-voice',)
+        MAX_CONCURRENCY = min(capacities['wetype'], GLOBAL_MAX_CONCURRENCY)
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     elif name == 'wechat':
         backend = WechatBackend()
-        MODELS = ('wechat-voice', 'whisper-1')
-        MAX_CONCURRENCY = capacities['wechat']
+        MODELS = ('wechat-voice',)
+        MAX_CONCURRENCY = min(capacities['wechat'], GLOBAL_MAX_CONCURRENCY)
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     elif name == 'doubao':
         from doubao_backend import DoubaoBackend
         backend = DoubaoBackend()
-        MODELS = ('doubao-voice', 'whisper-1')
-        MAX_CONCURRENCY = capacities['doubao']
+        MODELS = ('doubao-voice',)
+        MAX_CONCURRENCY = min(capacities['doubao'], GLOBAL_MAX_CONCURRENCY)
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     else:
         raise ValueError('Unknown backend')

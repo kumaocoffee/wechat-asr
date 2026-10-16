@@ -34,9 +34,9 @@ def main():
     checks = []
     before = httpx.get(health_url, trust_env=False).json()
     assert before['backend'] == 'wetype-3.0.0.34-experimental', before
-    assert before['max_concurrency'] == 1
+    assert before['max_concurrency'] == 4
     model_names = [m.id for m in client.models.list()]
-    assert model_names == ['wetype-voice', 'whisper-1'], model_names
+    assert model_names == ['wetype-voice'], model_names
 
     def call(data, name, expected, response_format='json'):
         started = time.monotonic()

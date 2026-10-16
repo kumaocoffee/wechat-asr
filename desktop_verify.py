@@ -21,7 +21,7 @@ def inspect_layout(app):
     results = []
     def walk(widget):
         for child in widget.winfo_children():
-            if isinstance(child, app.ttk.Button) and child.winfo_ismapped():
+            if isinstance(child, (app.ttk.Button, app.tk.Button)) and child.winfo_ismapped():
                 assert child.winfo_width() >= child.winfo_reqwidth(), ('width clipped', child.cget('text'))
                 assert child.winfo_height() >= child.winfo_reqheight(), ('height clipped', child.cget('text'))
                 current = child
@@ -100,9 +100,19 @@ def lifecycle_self_test(output):
                 return error.code
 
         first_key, second_key = 'lifecycle-test-key-one', 'lifecycle-test-key-two'
+        app.api_key.set('unused-configured-key')
+        assert not app.auth_enabled.get()
+        app._start()
+        pump(lambda: app.operation is None and app.connected and app.owned)
+        assert response('any-client-key') == 200 and response('') == 200
+        unauth_pid = app.controller._metadata()['pid']
+        app.api_key.set('another-unused-key')
+        assert app._apply_settings()
+        assert app.operation is None and app.controller._metadata()['pid'] == unauth_pid
+        report['checks'].append('disabled_auth_ignores_keys_and_unused_key_changes_do_not_restart')
+        app.auth_enabled.set(True)
         app.api_key.set(first_key)
         assert app._apply_settings()
-        app._start()
         pump(lambda: app.operation is None and app.connected and app.owned)
         assert response(first_key) == 200 and response('wrong-test-key') == 401
         before_pid = app.controller._metadata()['pid']
@@ -147,7 +157,7 @@ def lifecycle_self_test(output):
         reopened = tk.Tk()
         reopened.withdraw()
         again = DesktopApplication(reopened, port)
-        assert again.api_key.get() == second_key
+        assert again.api_key.get() == second_key and again.auth_enabled.get()
         again.closed = True
         reopened.destroy()
         report['checks'].append('reopened_application_restores_saved_key')
