@@ -16,7 +16,7 @@ from desktop_service import (ServiceController, VERSION, health, saved_port, sav
                              saved_api_key, save_settings, transcribe_file)
 from desktop_tray import TrayIcon
 from bridge_config import validate_concurrency
-from desktop_settings import saved_concurrency
+from desktop_settings import saved_concurrency, saved_auth_enabled
 
 
 class DesktopApplication:
@@ -45,10 +45,12 @@ class DesktopApplication:
         key_error = None
         try:
             key = saved_api_key(self.runtime, default=os.getenv('WECHAT_API_KEY', ''))
+            auth_enabled = saved_auth_enabled(self.runtime, default=bool(os.getenv('WECHAT_API_KEY')))
         except ValueError as error:
-            key, key_error = '', str(error)
+            key, key_error, auth_enabled = '', str(error), False
         self.api_key = tk.StringVar(value=key)
-        self.applied_api_key = key
+        self.auth_enabled = tk.BooleanVar(value=auth_enabled)
+        self.applied_api_key = key if auth_enabled else ''
         self.status = tk.StringVar(value='正在检查服务…')
         self.detail = tk.StringVar(value='model 指定识别后端。')
         self.file_name = tk.StringVar(value='还没有选择音频')
@@ -177,12 +179,12 @@ class DesktopApplication:
         if self.operation or self.exit_requested:
             return False
         old = self.controller
-        key = self.api_key.get()
+        key = self.api_key.get() if self.auth_enabled.get() else ''
         try:
             port = int(self.port.get())
             capacities = validate_concurrency({key: int(value.get()) for key, value in self.concurrency_vars.items()})
             controller = old if port == old.port else ServiceController(port)
-            save_settings(port, key, self.runtime, concurrency=capacities)
+            save_settings(port, self.api_key.get(), self.runtime, concurrency=capacities, auth_enabled=self.auth_enabled.get())
         except (ValueError, OSError) as error:
             self._show_error(str(error))
             return False
@@ -212,10 +214,10 @@ class DesktopApplication:
     def _start(self):
         if not self._apply_port():
             return
-        key = self.api_key.get()
+        key = self.api_key.get() if self.auth_enabled.get() else ''
         try:
             capacities = validate_concurrency({name: int(value.get()) for name, value in self.concurrency_vars.items()})
-            save_settings(self.controller.port, key, self.runtime, concurrency=capacities)
+            save_settings(self.controller.port, self.api_key.get(), self.runtime, concurrency=capacities, auth_enabled=self.auth_enabled.get())
         except (ValueError, OSError) as error:
             self._show_error(str(error))
             return
@@ -272,7 +274,7 @@ class DesktopApplication:
         self._set_file(path)
 
     def _recognize(self):
-        port, api_key, path, model = self.controller.port, self.api_key.get(), self.audio_path, self.model.get()
+        port, api_key, path, model = self.controller.port, self.api_key.get() if self.auth_enabled.get() else '', self.audio_path, self.model.get()
         if path is None:
             return
         self.operation = 'recognizing'

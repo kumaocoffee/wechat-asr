@@ -216,7 +216,7 @@ class AdmissionTests(unittest.TestCase):
             with patch.object(server, 'gate', anyio.Semaphore(4)), patch.object(server.backend, 'transcribe', side_effect=transcribe):
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url='http://test') as client:
                     requests = [asyncio.create_task(client.post('/v1/audio/transcriptions',
-                                data={'model': 'whisper-1'}, files={'file': ('test.wav', str(i).encode())})) for i in range(8)]
+                                data={'model': 'wechat-voice'}, files={'file': ('test.wav', str(i).encode())})) for i in range(8)]
                     try:
                         for _ in range(200):
                             health = (await client.get('/health')).json()

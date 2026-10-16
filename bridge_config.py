@@ -1,10 +1,11 @@
 """Shared public model routes and validated per-provider admission settings."""
 PROVIDERS = {
     'wechat': {'name': '微信', 'model': 'wechat-voice', 'default': 4},
-    'wetype': {'name': '微信输入法', 'model': 'wetype-voice', 'default': 1},
-    'doubao': {'name': '豆包语音', 'model': 'doubao-voice', 'default': 3},
+    'wetype': {'name': '微信输入法', 'model': 'wetype-voice', 'default': 4},
+    'doubao': {'name': '豆包语音', 'model': 'doubao-voice', 'default': 4},
 }
 BRIDGE_ID = 'asr-bridge'
+GLOBAL_MAX_CONCURRENCY = 8
 DEFAULT_CONCURRENCY = {key: value['default'] for key, value in PROVIDERS.items()}
 
 

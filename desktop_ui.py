@@ -1,13 +1,13 @@
 """Compact native Windows views; service ownership stays in desktop.py."""
 from app_paths import resource_dir
-from bridge_config import PROVIDERS
+from bridge_config import PROVIDERS, GLOBAL_MAX_CONCURRENCY
 from desktop_service import VERSION
 
 
 def build(app):
     tk, ttk, root = app.tk, app.ttk, app.root
-    app.colors = {'bg': '#F3F5F7', 'paper': '#FFFFFF', 'ink': '#20252B',
-                  'muted': '#626A75', 'accent': '#0067C0', 'line': '#DDE1E6'}
+    app.colors = {'bg': '#EEF3F8', 'paper': '#FFFFFF', 'ink': '#213547',
+                  'muted': '#687D8E', 'accent': '#0067C0', 'line': '#DFE7EF'}
     c = app.colors
     root.title('ASR Bridge · 语音接口')
     root.geometry('940x660')
@@ -19,25 +19,33 @@ def build(app):
     root.option_add('*Font', ('Microsoft YaHei UI', 10))
     style = ttk.Style(root)
     style.theme_use('clam')
-    style.configure('TButton', font=('Microsoft YaHei UI', 9), padding=(10, 6),
-                    background='#FFFFFF', foreground=c['ink'], borderwidth=1)
+    style.configure('TButton', font=('Microsoft YaHei UI', 9), padding=(12, 7), width=0, relief='flat',
+                    background='#E4ECF4', foreground=c['ink'], borderwidth=0)
     style.map('TButton', background=[('active', '#EAF2FC')], foreground=[('disabled', '#8D949E')])
     style.configure('Accent.TButton', background=c['accent'], foreground='white')
     style.map('Accent.TButton', background=[('active', '#0058A4'), ('disabled', '#DDE7F2')])
     style.configure('TEntry', padding=5, fieldbackground='white')
-    style.configure('TCombobox', padding=5)
-    style.configure('TProgressbar', background=c['accent'], troughcolor=c['bg'], borderwidth=0)
-    style.configure('Bridge.TNotebook', background=c['bg'], borderwidth=0, tabmargins=0)
+    style.configure('TCombobox', padding=6, borderwidth=1, bordercolor=c['line'], arrowcolor=c['muted'])
+    style.map('TCombobox', fieldbackground=[('readonly', 'white')],
+              selectbackground=[('readonly', 'white')], selectforeground=[('readonly', c['ink'])])
+    style.configure('TProgressbar', background=c['accent'], troughcolor=c['bg'], borderwidth=0,
+                    bordercolor=c['bg'], lightcolor=c['bg'], darkcolor=c['bg'], thickness=4)
+    style.configure('Vertical.TScrollbar', background='#D7E2EC', troughcolor=c['paper'],
+                    bordercolor=c['paper'], lightcolor=c['paper'], darkcolor=c['paper'], arrowsize=12)
+    style.configure('Bridge.TNotebook', background=c['bg'], borderwidth=0, tabmargins=0,
+                    bordercolor=c['bg'], lightcolor=c['bg'], darkcolor=c['bg'])
     style.configure('Bridge.TNotebook.Tab', padding=(18, 8), background=c['bg'], foreground=c['muted'])
-    style.map('Bridge.TNotebook.Tab', background=[('selected', c['paper'])], foreground=[('selected', c['accent'])])
+    style.layout('Bridge.TNotebook.Tab', [])
     outer = tk.Frame(root, bg=c['bg'])
     outer.pack(fill='both', expand=True, padx=20, pady=16)
     header = tk.Frame(outer, bg=c['bg'])
     header.pack(fill='x', pady=(0, 12))
     tk.Label(header, text='ASR Bridge', bg=c['bg'], fg=c['ink'],
-             font=('Segoe UI', 17, 'bold')).pack(side='left')
+             font=('Segoe UI', 16, 'bold')).pack(side='left')
     tk.Label(header, text='语音接口', bg=c['bg'], fg=c['muted']).pack(side='left', padx=12)
     tk.Label(header, text=f'v{VERSION}', bg=c['bg'], fg=c['muted'], font=('Segoe UI', 9)).pack(side='right')
+    navigation = tk.Frame(outer, bg=c['bg'])
+    navigation.pack(fill='x', pady=(0, 14))
     service = tk.Frame(outer, bg=c['bg'])
     service.pack(fill='x', pady=(0, 10))
     app.state_label = tk.Label(service, textvariable=app.status, bg=c['bg'], fg=c['ink'])
@@ -54,21 +62,42 @@ def build(app):
     manual = tk.Frame(app.notebook, bg=c['paper'], padx=16, pady=14)
     app.notebook.add(home, text='首页')
     app.notebook.add(manual, text='手动转写')
-    app.notebook.bind('<<NotebookTabChanged>>', lambda _: app._queue_layout_check())
+    nav_items = []
+    for index, title in enumerate(('首页', '手动转写')):
+        item = tk.Frame(navigation, bg=c['bg'])
+        item.pack(side='left', padx=(0, 22))
+        button = tk.Button(item, text=title, command=lambda i=index: app.notebook.select(i),
+                           bg=c['bg'], activebackground=c['bg'], fg=c['muted'],
+                           relief='flat', borderwidth=0, highlightthickness=0,
+                           padx=2, pady=5, cursor='hand2', font=('Microsoft YaHei UI', 10))
+        button.pack()
+        underline = tk.Frame(item, height=2, bg=c['bg'])
+        underline.pack(fill='x')
+        nav_items.append((button, underline))
+    def select_page(event=None):
+        selected = app.notebook.index(app.notebook.select())
+        for index, (button, underline) in enumerate(nav_items):
+            button.configure(fg=c['accent'] if index == selected else c['muted'])
+            underline.configure(bg=c['accent'] if index == selected else c['bg'])
+        app._queue_layout_check()
+    app.notebook.bind('<<NotebookTabChanged>>', select_page)
+    select_page()
     pools = tk.Frame(home, bg=c['paper'], padx=14, pady=12)
-    pools.pack(fill='x', pady=(10, 12))
+    pools.pack(fill='x', pady=(0, 12))
     heading = tk.Frame(pools, bg=c['paper'])
     heading.pack(fill='x', pady=(0, 7))
     app._label(heading, '并发池', 10, bold=True).pack(side='left')
-    app.pool_summary = tk.StringVar(value='服务未启动')
+    app.pool_summary = tk.StringVar(value=f'运行 0 / {GLOBAL_MAX_CONCURRENCY} · 排队 0')
     app._label(heading, '', 9, variable=app.pool_summary).pack(side='right')
     app.pool_views = {}
+    from tkinter.font import Font
+    name_width = max(Font(root, family='Microsoft YaHei UI', size=9).measure(p['name']) for p in PROVIDERS.values()) + 20
     for key, provider in PROVIDERS.items():
         row = tk.Frame(pools, bg=c['paper'])
         row.pack(fill='x', pady=4)
         row.columnconfigure(1, weight=1)
         app._label(row, provider['name'], 9).grid(row=0, column=0, sticky='w', padx=(0, 12))
-        row.columnconfigure(0, minsize=95)
+        row.columnconfigure(0, minsize=name_width)
         canvas = tk.Canvas(row, bg=c['paper'], height=24, highlightthickness=0, width=320)
         canvas.grid(row=0, column=1, sticky='ew')
         count = tk.StringVar()
@@ -169,7 +198,7 @@ def draw_pool(app, key):
     view['page'] = min(view['page'], (capacity - 1) // page_size)
     start, end = view['page'] * page_size, min((view['page'] + 1) * page_size, capacity)
     factor = float(app.root.tk.call('tk', 'scaling')) / (96 / 72)
-    size, gap = max(12, round(16 * factor)), max(3, round(4 * factor))
+    size, gap = max(12, round(12 * factor)), max(3, round(4 * factor))
     width = canvas.winfo_width()
     if width < 32:
         width = int(canvas.cget('width'))
@@ -221,11 +250,11 @@ def show_health(app, controller, result):
         draw_pool(app, key)
     if current:
         active, queued = current.get('active_requests', 0), current.get('queued_requests', 0)
-        app.pool_summary.set(f'运行 {active} · 排队 {queued}')
+        app.pool_summary.set(f'运行 {active} / {GLOBAL_MAX_CONCURRENCY} · 排队 {queued}')
         app.detail.set(str(current['last_error']) if failed else
                        '服务运行中 · model 指定后端' if app.owned else '已连接现有服务，此窗口不会停止它。')
     else:
-        app.pool_summary.set('运行 0 · 排队 0')
+        app.pool_summary.set(f'运行 0 / {GLOBAL_MAX_CONCURRENCY} · 排队 0')
         app.detail.set('选择模型后调用对应后端；微信和输入法需保持客户端可用。')
     app._update_buttons()
 
@@ -245,14 +274,15 @@ def settings(app):
     ttk.Label(panel, text='本机接口端口').pack(anchor='w')
     app.port_box = ttk.Entry(panel, textvariable=app.port, width=34)
     app.port_box.pack(fill='x', pady=(5, 12))
-    ttk.Label(panel, text='API Key（留空关闭本地鉴权）').pack(anchor='w')
+    ttk.Checkbutton(panel, text='启用 API Key 鉴权', variable=app.auth_enabled).pack(anchor='w')
     ttk.Entry(panel, textvariable=app.api_key, show='•', width=34).pack(fill='x', pady=(5, 12))
     for key, provider in PROVIDERS.items():
         line = ttk.Frame(panel)
         line.pack(fill='x', pady=4)
         ttk.Label(line, text=provider['name'] + '并发数').pack(side='left')
         ttk.Entry(line, textvariable=app.concurrency_vars[key], width=12).pack(side='right')
-    ttk.Label(panel, text='各池独立调度，并发数填写正整数，无 32 上限。').pack(anchor='w', pady=(9, 4))
+    ttk.Label(panel, text='每个模型默认 4 路，总运行上限 8 路，超出排队。').pack(anchor='w', pady=(9, 4))
+    ttk.Label(panel, text='关闭鉴权时，客户端 API Key 可任意填写或留空。').pack(anchor='w', pady=(0, 6))
     ttk.Label(panel, text='修改后会重启此窗口启动的服务，等待已有请求完成。').pack(anchor='w', pady=(0, 12))
     def apply():
         if app._apply_settings():

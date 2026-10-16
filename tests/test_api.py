@@ -25,7 +25,7 @@ class ApiContractTests(unittest.TestCase):
 
     def post(self, fields=None, audio=None):
         return self.client.post('/v1/audio/transcriptions',
-            data=fields or {'model': 'whisper-1'},
+            data=fields or {'model': 'wechat-voice'},
             files={'file': ('audio.wav', self.audio if audio is None else audio, 'audio/wav')})
 
     def test_sdk_contract_and_formats(self):
@@ -43,7 +43,7 @@ class ApiContractTests(unittest.TestCase):
         with patch.object(server.backend, 'transcribe') as call:
             for extra in ({'response_format': 'srt'}, {'stream': 'true'}, {'language': 'en'},
                           {'prompt': 'test'}, {'temperature': '1'}, {'include[]': 'logprobs'}):
-                r = self.post({'model': 'whisper-1', **extra})
+                r = self.post({'model': 'wechat-voice', **extra})
                 self.assertEqual(r.status_code, 400)
                 self.assertEqual(r.json()['error']['type'], 'invalid_request_error')
             call.assert_not_called()
@@ -53,7 +53,7 @@ class ApiContractTests(unittest.TestCase):
             self.assertEqual(self.client.get('/v1/models').status_code, 401)
             r = self.client.get('/v1/models', headers={'Authorization': 'Bearer test-only-key'})
             self.assertEqual(r.status_code, 200)
-            self.assertEqual([x['id'] for x in r.json()['data']], ['wechat-voice', 'whisper-1'])
+            self.assertEqual([x['id'] for x in r.json()['data']], ['wechat-voice'])
         with patch.object(server.backend, 'transcribe', side_effect=BackendError('请登录微信')):
             r = self.post()
             self.assertEqual(r.status_code, 503)

@@ -26,10 +26,10 @@ API_KEY = os.environ.get('WECHAT_API_KEY', 'wechat-local')
 client = OpenAI(base_url=URL, api_key=API_KEY, timeout=150, max_retries=0)
 checks = []
 models = client.models.list()
-assert {'wechat-voice', 'whisper-1'} == {m.id for m in models.data}
+assert {'wechat-voice'} == {m.id for m in models.data}
 checks.append({'check': 'sdk_models', 'models': [m.id for m in models.data]})
 with (FIXTURES / 'test.wav').open('rb') as audio:
-    first = client.audio.transcriptions.create(model='whisper-1', file=audio)
+    first = client.audio.transcriptions.create(model='wechat-voice', file=audio)
 assert first.text == '你好，这是微信语音接口测试，今天阳光很好'
 checks.append({'check': 'sdk_json', 'response': first.model_dump(exclude_none=True)})
 
@@ -41,7 +41,7 @@ checks.append({'check': 'sdk_mp3_text', 'response': second})
 
 try:
     with (FIXTURES / 'test.wav').open('rb') as audio:
-        client.audio.transcriptions.create(model='whisper-1', file=audio, stream=True)
+        client.audio.transcriptions.create(model='wechat-voice', file=audio, stream=True)
     raise AssertionError('stream must be rejected')
 except APIStatusError as error:
     assert error.status_code == 400 and error.body['param'] == 'stream'
@@ -55,7 +55,7 @@ for concurrency in (2, 4, 8):
         with (FIXTURES / name).open('rb') as audio:
             barrier.wait(timeout=10)
             started = time.monotonic()
-            response = client.audio.transcriptions.with_raw_response.create(model='whisper-1', file=audio)
+            response = client.audio.transcriptions.with_raw_response.create(model='wechat-voice', file=audio)
             text = response.parse().text
             assert text == expected, (index, name, text)
             assert response.headers.get('x-wechat-session-cleaned') == 'true'

@@ -156,8 +156,8 @@ class WetypeApiTests(unittest.TestCase):
             server.configure_backend('wetype')
             client = TestClient(server.app)
             names = [m['id'] for m in client.get('/v1/models').json()['data']]
-            self.assertEqual(names, ['wetype-voice', 'whisper-1'])
-            self.assertEqual(client.get('/health').json()['max_concurrency'], 1)
+            self.assertEqual(names, ['wetype-voice'])
+            self.assertEqual(client.get('/health').json()['max_concurrency'], 4)
             result = wetype_backend.WetypeTranscription('测试', 1, 123, 50, 100, 'server_end_flag')
             with patch.object(server.backend, 'transcribe', return_value=result):
                 reply = client.post('/v1/audio/transcriptions', data={'model': 'wetype-voice'},
@@ -165,7 +165,7 @@ class WetypeApiTests(unittest.TestCase):
                 self.assertEqual(reply.json(), {'text': '测试'})
                 self.assertEqual(reply.headers['x-asr-completion'], result.completion)
             server.configure_backend('wechat')
-            self.assertEqual(server.MODELS, ('wechat-voice', 'whisper-1'))
+            self.assertEqual(server.MODELS, ('wechat-voice',))
             self.assertEqual(server.MAX_CONCURRENCY, 4)
         finally:
             server.backend, server.MODELS, server.MAX_CONCURRENCY, server.gate = state

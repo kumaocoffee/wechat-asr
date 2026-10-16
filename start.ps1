@@ -1,5 +1,5 @@
 ﻿param([int]$Port = 8765, [int]$WechatPid = 0, [switch]$Background,
-      [int]$WechatConcurrency = 4, [int]$WetypeConcurrency = 1, [int]$DoubaoConcurrency = 3)
+      [int]$WechatConcurrency = 4, [int]$WetypeConcurrency = 4, [int]$DoubaoConcurrency = 4)
 $ErrorActionPreference = 'Stop'
 $taskRoot = $PSScriptRoot
 $taskPython = Join-Path $taskRoot 'env\python.exe'
