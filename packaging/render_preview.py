@@ -38,6 +38,7 @@ def main():
     app._show_health(app.controller, (state, state is not None))
     if args.state in ('result', 'error') or args.sample:
         app._sample()
+        app.file_detail.set('196.3 KiB · 随应用提供的合成示例音频')
     if args.state in ('result', 'error'):
         app.file_detail.set('6.3 秒 · 随应用提供的合成示例音频')
     if args.state == 'result':

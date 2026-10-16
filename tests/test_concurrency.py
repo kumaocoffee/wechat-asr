@@ -64,6 +64,72 @@ class BackendConcurrencyTests(unittest.TestCase):
             discovery.assert_not_called()
         self.assertTrue(self.bridge.agent_connected)
 
+    def test_unexpected_disconnect_quarantines_the_live_process(self):
+        self.session.is_detached = True
+        self.bridge._agent_detached(self.session, 123, 1, 'connection-terminated')
+        with self.assertRaises(BackendError) as error:
+            self.bridge.transcribe(b'A')
+        self.assertEqual(error.exception.code, 'agent_disconnected')
+        self.assertFalse(self.bridge.healthy)
+        self.assertEqual(self.bridge._unsafe_pid, 123)
+        self.agent.exports_sync.recognize.assert_not_called()
+
+    def test_unexpected_disconnect_during_rpc_is_not_treated_as_process_exit(self):
+        def disconnect(*args):
+            self.session.is_detached = True
+            self.bridge._agent_detached(self.session, 123, 1, 'connection-terminated')
+            raise RuntimeError('connection terminated')
+        self.agent.exports_sync.recognize.side_effect = disconnect
+        with self.assertRaises(BackendError):
+            self.bridge.transcribe(b'A')
+        self.assertIsNone(self.bridge._session)
+        self.assertFalse(self.bridge.healthy)
+        with self.assertRaises(BackendError) as error:
+            self.bridge.transcribe(b'B')
+        self.assertEqual(error.exception.code, 'agent_disconnected')
+        self.assertEqual(self.agent.exports_sync.recognize.call_count, 1)
+
+    def test_process_exit_and_expected_detach_do_not_quarantine(self):
+        self.bridge._agent_detached(self.session, 123, 1, 'process-terminated')
+        self.assertIsNone(self.bridge._unsafe_pid)
+        self.bridge._expected_detach = True
+        self.bridge._agent_detached(self.session, 123, 1, 'application-requested')
+        self.assertIsNone(self.bridge._unsafe_pid)
+
+    def test_detach_signal_does_not_wait_for_the_shutdown_ownership_lock(self):
+        self.bridge._expected_detach = True
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with self.bridge.lock:
+                callback=executor.submit(self.bridge._agent_detached,self.session,123,1,'application-requested')
+                callback.result(timeout=2)
+        self.assertIsNone(self.bridge._unsafe_pid)
+
+    def test_quarantine_recovers_only_with_a_new_wechat_process(self):
+        self.session.is_detached = True
+        self.bridge._agent_detached(self.session,123,1,'connection-terminated')
+        self.bridge._close_agent()
+        session,metadata,agent=MagicMock(),MagicMock(),MagicMock()
+        session.is_detached=False
+        session.create_script.side_effect=[metadata,agent]
+        metadata.exports_sync.info.return_value={'path':'verified.dll'}
+        agent.exports_sync.recognize.return_value=native_result('B')
+        agent.exports_sync.finalize.return_value={'cleaned':True}
+        agent.exports_sync.dispose.return_value={'cleaned':True}
+        with patch.object(backend,'discover_pid',return_value=456), patch.object(backend.frida,'attach',return_value=session), patch.object(self.bridge,'verify_dll'):
+            result=self.bridge.transcribe(b'B')
+            self.assertEqual(result.pid,456)
+            self.assertTrue(self.bridge.healthy)
+            self.assertIsNone(self.bridge._unsafe_pid)
+            self.bridge.close()
+    def test_lifecycle_logs_do_not_record_transcription_text(self):
+        with self.assertLogs('backend', level='INFO') as logs:
+            self.bridge._agent_message(123, 1, {'type':'send','payload':{
+                'event':'native_drained','id':'A','references':1,'elapsed_ms':50,'text':'private transcript'}}, None)
+            self.bridge._agent_message(123, 1, {'type':'send','payload':{
+                'event':'final_result','text':'private transcript'}}, None)
+        self.assertIn('native_drained', logs.output[0])
+        self.assertNotIn('private transcript', '\n'.join(logs.output))
+
     def test_close_waits_for_every_in_flight_request(self):
         barrier = threading.Barrier(3)
         release = threading.Event()
