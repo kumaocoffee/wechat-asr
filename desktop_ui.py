@@ -7,7 +7,7 @@ from desktop_service import VERSION
 def build(app):
     tk, ttk, root = app.tk, app.ttk, app.root
     app.colors = {'bg': '#EEF3F8', 'paper': '#FFFFFF', 'ink': '#213547',
-                  'muted': '#687D8E', 'accent': '#0067C0', 'line': '#DFE7EF'}
+                  'muted': '#687D8E', 'accent': '#0067C0', 'line': '#DFE7EF', 'slot_border': '#8293A5'}
     c = app.colors
     root.title('ASR Bridge · 语音接口')
     root.geometry('940x660')
@@ -118,7 +118,7 @@ def build(app):
     legend.pack(anchor='e', pady=(6, 0))
     for color, label in (('#22954E', '占用'), (c['paper'], '空闲')):
         mark = tk.Canvas(legend, width=10, height=10, bg=c['paper'], highlightthickness=0)
-        mark.create_rectangle(0, 0, 9, 9, fill=color, outline=c['line'] if label == '空闲' else color)
+        mark.create_rectangle(0, 0, 9, 9, fill=color, outline=c['slot_border'] if label == '空闲' else color)
         mark.pack(side='left', padx=(9, 4))
         app._label(legend, label, 8).pack(side='left')
     info = tk.Frame(home, bg=c['paper'], padx=14, pady=12)
@@ -215,7 +215,7 @@ def draw_pool(app, key):
         busy = index in occupied
         canvas.create_rectangle(x, y, x + size - 1, y + size - 1,
                                 fill='#22954E' if busy else app.colors['paper'],
-                                outline='#22954E' if busy else app.colors['line'])
+                                outline='#22954E' if busy else app.colors['slot_border'])
     view['count'].set(f'{len(occupied)} / {capacity} 占用')
     if capacity > page_size:
         view['pages'].grid()
