@@ -1,6 +1,6 @@
 """Compact native Windows views; service ownership stays in desktop.py."""
 from app_paths import resource_dir
-from bridge_config import PROVIDERS, GLOBAL_MAX_CONCURRENCY
+from bridge_config import PROVIDERS
 from desktop_service import VERSION
 
 
@@ -87,7 +87,7 @@ def build(app):
     heading = tk.Frame(pools, bg=c['paper'])
     heading.pack(fill='x', pady=(0, 7))
     app._label(heading, '并发池', 10, bold=True).pack(side='left')
-    app.pool_summary = tk.StringVar(value=f'运行 0 / {GLOBAL_MAX_CONCURRENCY} · 排队 0')
+    app.pool_summary = tk.StringVar(value='运行 0 · 排队 0')
     app._label(heading, '', 9, variable=app.pool_summary).pack(side='right')
     app.pool_views = {}
     from tkinter.font import Font
@@ -250,11 +250,11 @@ def show_health(app, controller, result):
         draw_pool(app, key)
     if current:
         active, queued = current.get('active_requests', 0), current.get('queued_requests', 0)
-        app.pool_summary.set(f'运行 {active} / {GLOBAL_MAX_CONCURRENCY} · 排队 {queued}')
+        app.pool_summary.set(f'运行 {active} · 排队 {queued}')
         app.detail.set(str(current['last_error']) if failed else
                        '服务运行中 · model 指定后端' if app.owned else '已连接现有服务，此窗口不会停止它。')
     else:
-        app.pool_summary.set(f'运行 0 / {GLOBAL_MAX_CONCURRENCY} · 排队 0')
+        app.pool_summary.set('运行 0 · 排队 0')
         app.detail.set('选择模型后调用对应后端；微信和输入法需保持客户端可用。')
     app._update_buttons()
 
@@ -281,7 +281,7 @@ def settings(app):
         line.pack(fill='x', pady=4)
         ttk.Label(line, text=provider['name'] + '并发数').pack(side='left')
         ttk.Entry(line, textvariable=app.concurrency_vars[key], width=12).pack(side='right')
-    ttk.Label(panel, text='每个模型默认 4 路，总运行上限 8 路，超出排队。').pack(anchor='w', pady=(9, 4))
+    ttk.Label(panel, text='每个模型默认 4 路，可分别设置并发数，超出本池排队。').pack(anchor='w', pady=(9, 4))
     ttk.Label(panel, text='关闭鉴权时，客户端 API Key 可任意填写或留空。').pack(anchor='w', pady=(0, 6))
     ttk.Label(panel, text='修改后会重启此窗口启动的服务，等待已有请求完成。').pack(anchor='w', pady=(0, 12))
     def apply():

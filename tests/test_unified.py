@@ -72,12 +72,12 @@ class UnifiedApiTests(unittest.TestCase):
                     data={'model':'wechat-voice'},files={'file':('x.wav',b'a')})
                 self.assertEqual(result.json(),{'text':'ok'})
 
-    def test_default_capacities_and_true_shared_limit(self):
+    def test_default_capacities_admit_twelve_requests_independently(self):
         self.assertEqual(validate_concurrency(),dict.fromkeys(('wechat','wetype','doubao'),4))
-        self._exercise_limit(None, ['wechat-voice']*4+['wetype-voice']*4+['doubao-voice']*4,8,4)
+        self._exercise_limit(None, ['wechat-voice']*4+['wetype-voice']*4+['doubao-voice']*4,12,0)
 
-    def test_custom_provider_capacity_cannot_bypass_shared_limit(self):
-        self._exercise_limit({'wechat':42,'wetype':2,'doubao':1}, ['wechat-voice']*10,8,2)
+    def test_custom_provider_capacity_above_40_has_no_shared_ceiling(self):
+        self._exercise_limit({'wechat':42,'wetype':2,'doubao':1}, ['wechat-voice']*44+['doubao-voice'],43,2)
 
     def _exercise_limit(self, capacities, models, active, queued):
         server.configure_backend('all',capacities)
@@ -93,12 +93,12 @@ class UnifiedApiTests(unittest.TestCase):
                 try:
                     for _ in range(300):
                         data=(await client.get('/health')).json()
-                        self.assertLessEqual(data['active_requests'],8)
+                        self.assertLessEqual(data['active_requests'],sum(p['max_concurrency'] for p in data['pools']))
                         if data['active_requests']==active and data['queued_requests']==queued:
                             break
                         await asyncio.sleep(.01)
                     else:self.fail('admission did not reach expected running and queued counts')
-                    self.assertEqual(data['max_concurrency'],8)
+                    self.assertEqual(data['max_concurrency'],sum(p['max_concurrency'] for p in data['pools']))
                     for pool in data['pools']:
                         self.assertLessEqual(pool['active_requests'],pool['max_concurrency'])
                         self.assertEqual(len(pool['occupied_slots']),pool['active_requests'])
@@ -113,12 +113,10 @@ class UnifiedApiTests(unittest.TestCase):
              patch.object(server.pools['doubao'].backend,'transcribe',side_effect=slow):
             asyncio.run(run())
 
-    def test_local_queue_does_not_reserve_global_capacity_and_cancellation_cleans_waiters(self):
-        import anyio
+    def test_local_queue_cancellation_cleans_waiters_without_affecting_other_pools(self):
         from bridge_pool import BackendPool
         async def run():
-            gate=anyio.Semaphore(8)
-            pools={key:BackendPool(key,MagicMock(),4,gate) for key in ('wechat','wetype','doubao')}
+            pools={key:BackendPool(key,MagicMock(),4) for key in ('wechat','wetype','doubao')}
             release=asyncio.Event()
             async def hold(pool):
                 async with pool.admit():await release.wait()
@@ -130,26 +128,29 @@ class UnifiedApiTests(unittest.TestCase):
             tasks=[asyncio.create_task(hold(pools['wechat'])) for _ in range(5)]
             try:
                 await wait_for(lambda:len(pools['wechat'].occupied)==4 and pools['wechat'].waiting==1)
-                # A local waiter must leave the other four global slots free.
-                self.assertEqual(gate.value,4)
-                tasks.extend(asyncio.create_task(hold(pools['wetype'])) for _ in range(4))
-                await wait_for(lambda:len(pools['wetype'].occupied)==4)
-                waiter=asyncio.create_task(hold(pools['doubao']))
-                tasks.append(waiter)
-                await wait_for(lambda:pools['doubao'].waiting==1)
+                tasks.extend(asyncio.create_task(hold(pools[key])) for key in ('wetype','doubao') for _ in range(4))
+                await wait_for(lambda:sum(len(p.occupied) for p in pools.values())==12)
+                waiter=tasks[4]
                 waiter.cancel()
                 await asyncio.gather(waiter,return_exceptions=True)
-                self.assertEqual(pools['doubao'].waiting,0)
-                self.assertEqual(pools['doubao'].gate.value,4)
-                self.assertEqual(gate.value,0)
+                self.assertEqual(pools['wechat'].waiting,0)
+                self.assertEqual(len(pools['wechat'].occupied),4)
+                self.assertEqual(len(pools['wetype'].occupied),4)
+                self.assertEqual(len(pools['doubao'].occupied),4)
             finally:
                 release.set()
                 await asyncio.gather(*tasks,return_exceptions=True)
-            self.assertEqual(gate.value,8)
             for pool in pools.values():
                 self.assertEqual((pool.waiting,pool.occupied),(0,set()))
+                self.assertEqual(pool.gate.value,4)
                 async with pool.admit():self.assertEqual(len(pool.occupied),1)
         asyncio.run(run())
+
+    def test_single_provider_uses_its_configured_capacity(self):
+        for key in ('wechat','wetype','doubao'):
+            server.configure_backend(key,dict.fromkeys(('wechat','wetype','doubao'),16))
+            self.assertEqual(server.MAX_CONCURRENCY,16)
+            self.assertEqual(self.client.get('/health').json()['max_concurrency'],16)
 
 
 class SettingsTests(unittest.TestCase):

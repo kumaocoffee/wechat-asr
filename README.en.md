@@ -16,11 +16,11 @@ No browser credentials are read for Doubao. Native modules are fingerprint-check
 
 ## Desktop application
 
-Extract the entire `WeChatASRBridge-0.3.1-windows-x64-portable.zip` and run the executable. Keep `_internal` beside it. A local build is written to `dist/`; the latest published GitHub release may precede the source version.
+Extract the entire `WeChatASRBridge-0.3.2-windows-x64-portable.zip` and run the executable. Keep `_internal` beside it. A local build is written to `dist/`; the latest published GitHub release may precede the source version.
 
 The **Home** tab shows service status, independent concurrency pools, Base URL, model identifiers and a documentation button. Green squares indicate occupied slots. The **Manual transcription** tab provides model selection, file/sample selection and result copying/saving.
 
-Settings include port, an explicit authentication switch, local API key and positive capacities for each provider. Each model defaults to 4 concurrent requests, with a shared running limit of 8. Requests exceeding either budget queue. Existing saved capacities are preserved. These settings do not guarantee upstream throughput. Large pools paginate their slot display.
+Settings include port, an explicit authentication switch, local API key and positive capacities for each provider. Each model defaults to 4 concurrent requests, and each provider is scheduled independently. Requests exceeding its configured capacity queue. Existing saved capacities are preserved. These settings do not guarantee upstream throughput. Large pools paginate their slot display.
 
 Closing the window hides it to the system tray. Normal exit waits for requests and safe native cleanup, and stops only application-owned services. Settings persist; API keys use current-user Windows DPAPI encryption. Native ownership uncertainty retains the agent instead of unloading a potentially live callback.
 
@@ -54,6 +54,6 @@ The service binds to loopback by default. Non-loopback binding requires `WECHAT_
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Offline tests cover independent routing/queues, the shared 8-request limit, per-model budgets, queue cancellation, callback ownership, encrypted settings and native DPI layout. These do not prove equivalent live upstream throughput. The packaged executable also supports `--self-test` and `--self-test-lifecycle`.
+Offline tests cover independent routing/queues, independent per-model budgets, queue cancellation, callback ownership, encrypted settings and native DPI layout. These do not prove equivalent live upstream throughput. The packaged executable also supports `--self-test` and `--self-test-lifecycle`.
 
-See [v0.3.1 verification](docs/UI_CONCURRENCY_VERIFICATION.md) for the current validation scope. `tests/verify_unified_live.py` is opt-in and sends only repository-synthesized audio to selected providers. Long-term reliability, arbitrary concurrent load and future client versions remain unverified. The project is unaffiliated with Tencent, ByteDance and OpenAI.
+See [v0.3.2 verification](docs/UI_CONCURRENCY_VERIFICATION.md) for the current validation scope. `tests/verify_unified_live.py` is opt-in and sends only repository-synthesized audio to selected providers. Long-term reliability, arbitrary concurrent load and future client versions remain unverified. The project is unaffiliated with Tencent, ByteDance and OpenAI.

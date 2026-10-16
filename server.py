@@ -18,12 +18,12 @@ import uvicorn
 
 from backend import BackendError, MAX_BYTES, WechatBackend
 from app_paths import runtime_dir, resource_dir
-from bridge_config import BRIDGE_ID, PROVIDERS, GLOBAL_MAX_CONCURRENCY, validate_concurrency
+from bridge_config import BRIDGE_ID, PROVIDERS, validate_concurrency
 from bridge_pool import BackendPool
 
 MODELS = ('wechat-voice',)
 MODEL_CREATED = int(time.time())
-app = FastAPI(title='ASR Bridge', version='0.3.1', docs_url=None, redoc_url=None)
+app = FastAPI(title='ASR Bridge', version='0.3.2', docs_url=None, redoc_url=None)
 backend = WechatBackend()
 MAX_CONCURRENCY = 4
 gate = anyio.Semaphore(MAX_CONCURRENCY)
@@ -105,7 +105,7 @@ async def health():
         return {'backend': BRIDGE_ID, 'status': 'ok' if all(s['status'] == 'ok' for s in states) else 'degraded',
                 'active_requests': sum(s['active_requests'] for s in states),
                 'queued_requests': sum(s['queued_requests'] for s in states),
-                'max_concurrency': GLOBAL_MAX_CONCURRENCY,
+                'max_concurrency': sum(s['max_concurrency'] for s in states),
                 'busy': any(s['active_requests'] for s in states), 'pools': states,
                 'formats': ['json', 'text'], 'max_audio_seconds': None,
                 'last_error': next((s['last_error'] for s in states if s['last_error']), None),
@@ -193,31 +193,30 @@ def configure_backend(name, concurrency=None):
         from wetype_backend import WetypeBackend
         from doubao_backend import DoubaoBackend
         backends = {'wechat': WechatBackend(), 'wetype': WetypeBackend(), 'doubao': DoubaoBackend()}
-        gate = anyio.Semaphore(GLOBAL_MAX_CONCURRENCY)
-        pools = {key: BackendPool(key, value, capacities[key], gate) for key, value in backends.items()}
+        pools = {key: BackendPool(key, value, capacities[key]) for key, value in backends.items()}
         backend = backends['wechat']
         MODELS = tuple(p['model'] for p in PROVIDERS.values())
-        MAX_CONCURRENCY = GLOBAL_MAX_CONCURRENCY
+        MAX_CONCURRENCY = gate = None
     elif name == 'wetype':
         from wetype_backend import WetypeBackend
         backend = WetypeBackend()
         MODELS = ('wetype-voice',)
-        MAX_CONCURRENCY = min(capacities['wetype'], GLOBAL_MAX_CONCURRENCY)
+        MAX_CONCURRENCY = capacities['wetype']
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     elif name == 'wechat':
         backend = WechatBackend()
         MODELS = ('wechat-voice',)
-        MAX_CONCURRENCY = min(capacities['wechat'], GLOBAL_MAX_CONCURRENCY)
+        MAX_CONCURRENCY = capacities['wechat']
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     elif name == 'doubao':
         from doubao_backend import DoubaoBackend
         backend = DoubaoBackend()
         MODELS = ('doubao-voice',)
-        MAX_CONCURRENCY = min(capacities['doubao'], GLOBAL_MAX_CONCURRENCY)
+        MAX_CONCURRENCY = capacities['doubao']
         gate = anyio.Semaphore(MAX_CONCURRENCY)
     else:
         raise ValueError('Unknown backend')
-    worker_limit = anyio.CapacityLimiter(MAX_CONCURRENCY)
+    worker_limit = anyio.CapacityLimiter(MAX_CONCURRENCY) if MAX_CONCURRENCY is not None else None
 
 
 def main(argv=None):

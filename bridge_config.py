@@ -5,7 +5,6 @@ PROVIDERS = {
     'doubao': {'name': '豆包语音', 'model': 'doubao-voice', 'default': 4},
 }
 BRIDGE_ID = 'asr-bridge'
-GLOBAL_MAX_CONCURRENCY = 8
 DEFAULT_CONCURRENCY = {key: value['default'] for key, value in PROVIDERS.items()}
 
 

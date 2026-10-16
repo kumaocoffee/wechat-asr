@@ -25,6 +25,15 @@ class DesktopLayoutTests(unittest.TestCase):
                             patch.object(desktop,'health',return_value=None):
                         app=desktop.DesktopApplication(root)
                     app._sample()
+                    providers=('wechat','wetype','doubao')
+                    state={'status':'ok','active_requests':12,'queued_requests':1,
+                           'pools':[{'provider':key,'max_concurrency':4,'occupied_slots':list(range(4))} for key in providers]}
+                    app._show_health(app.controller,(state,True))
+                    self.assertIn('运行 12',app.pool_summary.get())
+                    self.assertNotIn('/',app.pool_summary.get())
+                    for view in app.pool_views.values():
+                        canvas=view['canvas']
+                        self.assertEqual(sum(canvas.itemcget(item,'fill')=='#22954E' for item in canvas.find_all()),4)
                     app.concurrency['wechat']=108
                     app._show_health(app.controller, (None, False))
                     self.assertEqual(len(app.pool_views['wechat']['canvas'].find_all()),108)
