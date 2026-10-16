@@ -16,4 +16,3 @@ def validate_concurrency(value=None):
     if any(not isinstance(n, int) or isinstance(n, bool) or n <= 0 for n in value.values()):
         raise ValueError('并发数必须为正整数。')
     return value.copy()
-

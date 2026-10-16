@@ -55,4 +55,3 @@ class DoubaoBackend:
             self.closing = True
             while self.active:
                 self.lock.wait()
-
