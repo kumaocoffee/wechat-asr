@@ -1,5 +1,9 @@
 # WeChat ASR Bridge
 
+This branch also includes an experimental Windows WeType 3.0.0.34 provider:
+`python server.py --backend wetype --port 8766`, model alias `wetype-voice`.
+See [WeType implementation and limits (Chinese)](docs/WETYPE.md).
+
 An experimental Windows ASR bridge exposing the speech recognition used by Weixin's chat input as a programmable audio transcription API. [中文说明](README.md)
 
 The actual backend is the user's logged-in Weixin client and Weixin's recognition service. Audio is sent through Weixin, **not to OpenAI**. `whisper-1` is a compatibility alias, not an actual Whisper model.
