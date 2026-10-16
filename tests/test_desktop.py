@@ -134,8 +134,12 @@ class ServiceOwnershipTests(unittest.TestCase):
                     patch.object(desktop_service.subprocess, 'Popen') as launch:
                 launch.return_value.pid = 123
                 launch.return_value.poll.return_value = None
-                self.controller.start(api_key=key)
+                capacities={'wechat':108,'wetype':33,'doubao':64}
+                self.controller.start(api_key=key,concurrency=capacities)
                 args, options = launch.call_args
+                for provider,capacity in capacities.items():
+                    index=args[0].index('--'+provider+'-concurrency')
+                    self.assertEqual(args[0][index+1],str(capacity))
                 self.assertEqual(options['env'].get('WECHAT_API_KEY', ''), key)
                 self.assertNotIn('unit-only-desktop-key', ' '.join(args[0]))
                 self.assertNotIn('unit-only-desktop-key', self.controller.metadata_path.read_text())
@@ -225,10 +229,11 @@ class DesktopTranscriptionTests(unittest.TestCase):
                 self.assertEqual(request.url.path, '/v1/audio/transcriptions')
                 self.assertEqual(request.headers['Authorization'], 'Bearer local-test')
                 self.assertIn(b'synthetic', request.read())
+                self.assertIn(b'name="model"\r\n\r\ndoubao-voice', request.read())
                 return httpx.Response(200, json={'text': '测试文字'})
             client = httpx.Client(transport=httpx.MockTransport(respond))
             with patch.object(httpx, 'Client', return_value=client):
-                self.assertEqual(transcribe_file(audio, 18765, 'local-test'), '测试文字')
+                self.assertEqual(transcribe_file(audio, 18765, 'local-test', model='doubao-voice'), '测试文字')
             client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(401, json={'error': {'message': 'bad key'}})))
             with patch.object(httpx, 'Client', return_value=client):
                 with self.assertRaisesRegex(RuntimeError, '密钥'):

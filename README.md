@@ -1,204 +1,97 @@
-# WeChat ASR Bridge
+# ASR Bridge
 
-把 Windows 微信聊天框的语音识别能力提供为可编程的 ASR（自动语音识别）接口。
+将微信桌面端、微信输入法和豆包网页版语音识别整合成一个 Windows 应用及 OpenAI 兼容的本机音频转写接口。音频发送到所选后端的服务端，不发送给 OpenAI。
 
-支持 OpenAI Python SDK、WAV/MP3 输入、JSON/纯文本输出。识别请求由**已登录的微信客户端发送到微信的服务端**；音频不会发送到 OpenAI。`whisper-1` 是客户端兼容别名，后端实际使用微信。
+[English](README.en.md) · [MIT License](LICENSE) · [接口文档](docs/api.html) · [窗口版使用说明](docs/PORTABLE.md)
 
-[English](README.en.md) · [MIT License](LICENSE) · [协议与架构](docs/ARCHITECTURE.md)
+## 窗口版
 
-本分支另提供微信输入法 **3.0.0.34** 的实验后端，通过 `server.py --backend wetype --port 8766` 启动，模型别名为 `wetype-voice`。使用条件、验证方法和边界见 [微信输入法后端](docs/WETYPE.md)。
+使用与源码版本对应的 `WeChatASRBridge-0.3.0-windows-x64-portable.zip`，解压整个文件夹并运行 `WeChatASRBridge.exe`。本地构建产物在 `dist/`；GitHub Releases 的最新正式发布版本可能早于当前源码。
 
-豆包网页的匿名游客 ASR 原型另放在 [experiments/doubao_asr](experiments/doubao_asr/README.md)，可通过命令行独立转写 WAV；目前尚未接入 HTTP 服务和桌面窗口。
+- **首页**：服务状态、三个独立并发池、Base URL、model 和接口文档入口。每个小格代表一个并发名额，占用显示绿色，空闲无填色。
+- **手动转写**：选择 model、选择音频或示例音频、识别、复制或保存文字。
+- **设置**：端口、本地 API Key 和三个后端各自的并发数。并发数为自定义正整数，没有 32 的硬上限，也不共用 AnyIO 默认的 40 线程预算。默认值为微信 4、微信输入法 1、豆包 3；它们只是初始配置，不是上游能力保证。
+- 关闭窗口后驻留托盘；正常退出会等待请求和原生会话清理。只停止本应用启动的服务。
 
-## 免安装应用（推荐）
+![窗口版首页](docs/portable-preview.png)
 
-从 [Releases 下载 Windows 免安装窗口版](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest)，解压整个 ZIP，双击 `WeChatASRBridge.exe`。登录微信后点击「启动服务」，即可选择音频识别，或让 Screenpipe 调用本机接口。无需安装 Python、conda 或 FFmpeg。
+## 模型路由
 
-应用支持服务状态、4 路并发、音频识别、复制/保存结果、连接设置和运行日志；端口与 API Key 可保存，密钥使用 Windows DPAPI 加密。关闭窗口后应用驻留系统托盘，接口服务继续运行；托盘菜单可以恢复窗口或正常退出并停止自有服务。详细步骤见 [窗口版使用说明](docs/PORTABLE.md)。
+| model | 后端 | 条件 |
+|---|---|---|
+| `wechat-voice` | 微信桌面端 | 微信 4.1.13.65 已登录，账号的 iLink/Opus 能力可用 |
+| `wetype-voice` | 微信输入法 | 已验证的微信输入法 3.0.0.34 正在运行 |
+| `doubao-voice` | 豆包网页版匿名会话 | 能正常访问豆包网页及语音网关，无需浏览器登录 |
+| `whisper-1` | 微信兼容别名 | 统一服务下等同于 `wechat-voice`，不是 Whisper 模型 |
 
-![免安装窗口版界面](docs/portable-preview.png)
+微信和输入法执行已适配模块的指纹核验，版本不匹配时拒绝原生调用；不需要同时满足所有后端的运行条件才能启动应用。某个后端不可用时，其他后端仍可使用。豆包使用普通游客初始化，不读取 Chrome/Edge 登录信息，也不保存浏览器 Cookie。
 
-## 使用前确认
+原生客户端与私有网页协议可能变化，当前实现不能保证任意版本或长期稳定运行。配置很大的并发数不会自动提高上游限额，可能增加本机资源占用或识别失败。大并发池的格子分组显示，显示分页不会减少实际配置容量。
 
-- Windows x64，推荐 Windows 10/11。
-- 使用源码启动或开发时，需要 Miniconda/Anaconda 和 Python 3.11 x64；免安装应用不需要。
-- 微信 **4.1.13.65**，登录后保留聊天主窗口。安装目录可以不同，程序自动定位实际加载的 DLL。
-- 当前账号启用了微信语音输入的 iLink 与 Opus 配置。程序不修改开关。
+## 从源码运行
 
-目前仅对下面的 DLL 指纹验证过；微信升级后将拒绝原生调用，需要重新适配：
-
-```text
-8f7406a8a465e851ee10eaecccb572d0e5b4e00d480c770938c714c396097b74
-```
-
-这是版本限定的实验桥接器。原生插桩存在影响微信稳定性的可能，尚不能保证长期连续运行。项目与腾讯、微信、OpenAI 无隶属关系，不包含微信安装文件、登录密钥或聊天数据库。
-
-## 从源码启动
-
-在 Miniconda/Anaconda Prompt 或已能使用 `conda` 的 PowerShell 中：
+Windows x64，使用 Python 3.11 conda 环境：
 
 ```powershell
-git clone https://github.com/kuxiaowo/wechat-asr-bridge.git
-cd wechat-asr-bridge
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
+.\env\python.exe desktop.py
 ```
 
-手动登录微信，接着执行：
+仅启动 HTTP 服务：
 
 ```powershell
-.\env\python.exe .\doctor.py
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+.\env\python.exe server.py --port 8765 `
+  --wechat-concurrency 4 --wetype-concurrency 2 --doubao-concurrency 3
 ```
 
-打开 [接口文档](http://127.0.0.1:8765/docs)，或在另一个终端验证：
+也可使用 `start.ps1 -Background`；三个并发参数分别为 `-WechatConcurrency`、`-WetypeConcurrency`、`-DoubaoConcurrency`。停止使用 `stop.ps1 -Port 8765`。单后端诊断可使用 `server.py --backend wechat|wetype|doubao`；单后端模式下 `whisper-1` 指向该后端。
 
-```powershell
-.\env\python.exe .\example_openai.py
-```
+## 接入其他程序
 
-正常会输出：“你好，这是微信语音接口测试，今天阳光很好”。示例音频在 `tests/fixtures/`，全部为专门合成的测试语音，不包含个人录音。
-
-`doctor.py` 只检查环境、微信主进程和 DLL 指纹，不安装原生钩子，也不提交音频。诊断通过仍需用示例请求验证识别服务是否就绪。
-
-## 配置客户端
-
-| 配置项 | 值 |
+| 参数 | 值 |
 |---|---|
 | Base URL | `http://127.0.0.1:8765/v1` |
-| API Key | 默认填 `wechat-local` |
-| 模型 | `wechat-voice` 或 `whisper-1` |
-| 请求 | `POST /v1/audio/transcriptions`，multipart 表单 |
+| model | 上表中的路由标识 |
+| API Key | 未启用本地鉴权时可填 `local`；启用后填设置中的密钥 |
+| 转写 | `POST /v1/audio/transcriptions`，multipart 表单 |
 | 模型列表 | `GET /v1/models` |
-| 健康检查 | `GET /health`；不验证即时登录状态 |
+| 状态及并发池 | `GET /health`，只读，不提交识别 |
+| HTML 接口文档 | `http://127.0.0.1:8765/docs`，也可离线打开 `docs/api.html` |
 
 ```python
 from openai import OpenAI
 
-client = OpenAI(
-    base_url="http://127.0.0.1:8765/v1",
-    api_key="wechat-local",
-    timeout=150,
-    max_retries=0,
-)
-with open("audio.mp3", "rb") as audio:
+client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="local",
+                timeout=180, max_retries=0)
+with open("audio.wav", "rb") as audio:
     result = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=audio,
-        response_format="json",
-    )
+        model="doubao-voice", file=audio, response_format="json")
 print(result.text)
 ```
 
-成功响应：
+单个上传文件最大 25 MiB，完整解码后在内存中转写。支持 `json` 和 UTF-8 `text`；`stream=false`、`temperature=0` 仅作为兼容默认值。`language`、`prompt`、字幕、逐词时间戳、说话人分离及流式响应尚未实现，传入时明确返回错误。
 
-```json
-{"text":"你好，这是微信语音接口测试，今天阳光很好"}
-```
+默认只监听 `127.0.0.1`。使用 `--host` 暴露非本机地址前必须设置 `WECHAT_API_KEY`。窗口保存的密钥使用当前用户 Windows DPAPI 加密，不会作为命令行参数传给子进程。接口文档不包含密钥。
 
-`response_format="text"` 返回 UTF-8 纯文本。默认本机监听且未启用鉴权，API Key 仅满足 SDK 参数要求；可选启用鉴权：
-
-```powershell
-$env:WECHAT_API_KEY = 'your-local-secret'
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
-```
-
-客户端必须使用同一密钥。默认只监听 `127.0.0.1`。通过 `server.py --host` 指定其他地址时必须设置 `WECHAT_API_KEY`。
-
-## 后台启动和停止
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1 -Background
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1
-```
-
-停止命令会通知服务正常退出，让已经开始的请求完成并清理原生会话；不会直接强杀微信或服务进程。前台服务可按 Ctrl+C。
-
-端口被占用时会提示，可以改为：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1 -Background -Port 8766
-powershell -NoProfile -ExecutionPolicy Bypass -File .\stop.ps1 -Port 8766
-```
-
-客户端对应改为 `http://127.0.0.1:8766/v1`。日志和后台控制文件在 `.runtime/`，不会提交到 Git。
-
-微信重启后程序会重新查找主进程。多个微信主窗口时可指定 `-WechatPid <PID>`，或设置 `WECHAT_PID` 环境变量；指定后需要在微信重启时更新 PID。
-
-## 兼容范围与限制
-
-- 不设置音频总时长上限，单文件最大 **25 MiB**。已实测 **75.3 秒 WAV/MP3**；原生 Opus 流按帧边界分包，在同一识别会话中递增包序号，仅最后一包标记结束。更长音频的微信服务端限制仍待验证。
-- WAV/MP3 已验证，其他输入格式使用随 Python 依赖提供的 FFmpeg 解码；无需单独安装 FFmpeg。
-- 支持 `json`/`text`。`stream=false`、`temperature=0` 可作为兼容默认参数传入；不控制微信识别模型温度。
-- 暂不支持 `language`、`prompt`、流式输出、逐词时间戳、字幕或说话人分离。未实现参数返回 400，不会假装已经生效。
-- 默认支持 **4 路并发识别**，超出的请求等待空闲槽位，不再因另一个请求正在识别而返回 429。各请求有独立原生会话、回调和清理过程；仍使用单个 Uvicorn worker，避免多个进程争用同一微信 agent。
-- 微信不可用返回 503，识别超时返回 504，错误体为 OpenAI 风格的 `error` 对象。
-- 上传音频和文本不会持久保存在项目中。multipart 解析可能使用请求结束后清理的系统临时文件；转换和转写缓冲在内存中处理。
-- 仅实现音频转写与模型列表，不实现聊天、翻译、语音生成或 Realtime API。
-- 同一微信进程复用常驻 Frida agent，每次调用创建并清理独立原生语音会话；服务停止时统一分离钩子和卸载脚本。清理状态不确定时暂停调用并保留 agent，需退出微信后重新登录。
-
-## 常见问题
-
-| 情况 | 处理 |
-|---|---|
-| 找不到 conda | 使用 Miniconda/Anaconda Prompt，或先安装 Miniconda |
-| 无法执行 PowerShell 脚本 | 使用快速开始中的 `powershell -ExecutionPolicy Bypass -File ...`，只影响这次启动进程 |
-| 微信升级 / DLL 指纹不符 | 暂停使用，等待该版本的地址和对象布局重新适配 |
-| 503 / 无有效协程 | 确认微信已登录且聊天主窗口正常；部分账号可能未启用 iLink/Opus |
-| 多个微信进程 | 自动发现只选择有聊天主窗口的主进程；必要时指定 PID，不要选择 OCR/播放器子进程 |
-| 端口占用 | 停止原实例，或使用 `-Port 8766` |
-| 请求排队 | 同时最多识别 4 个请求；客户端超时应包含排队时间 |
-| 健康检查 ok 但转写失败 | `/health` 只表示桥接器状态，需查看错误响应和 `.runtime/` 日志 |
-
-## 开发与验证
-
-无需登录微信的 API 合约与音频检查：
+## 开发、构建和验证
 
 ```powershell
 .\env\python.exe -m unittest discover -s tests -p "test_*.py" -v
-```
-
-已登录微信且服务运行时的真实 SDK 集成验证：
-
-```powershell
-.\env\python.exe .\tests\verify_live.py
-# 其他端口：
-.\env\python.exe .\tests\verify_live.py --base-url http://127.0.0.1:8766/v1
-```
-
-后者会把合成测试语音发送给微信识别服务，检查 WAV JSON、MP3 纯文本、SDK 错误解析，以及 2/4/8 个同时发起的请求是否全部成功、返回各自正确文本。8 请求会验证最多 4 路识别及其余请求排队。请在没有其他客户端请求的独立实例中运行。报告写入 `.runtime/api-verification.json`，不上传真实机器 PID、路径或运行日志。CI 在 Windows 上只跑无需微信的测试。
-
-超过 35 秒的完整转写验证（使用仓库合成语音组成长音频，独立结尾从第 37.68 秒开始）：
-
-```powershell
-.\env\python.exe tests\verify_long.py
-```
-
-同时检查 WAV/MP3 的完整时长、结尾文字和会话清理，报告写入 `.runtime/long-verification.json`。移除限制与原生分包的调查记录见 [长音频验证](docs/LONG_AUDIO.md)。
-
-连续调用和崩溃修复验证（必须只有一个服务实例连接微信）：
-
-```powershell
-.\env\python.exe tests\verify_stability.py --port 8765 --requests 20
-```
-
-该脚本检查每次转写结果及 `agent_generation` 是否保持一致，报告写入 `.runtime/stability-verification.json`。服务停止过程可用 `tests/verify_shutdown.py --port 8765` 验证，此命令会正常停止被测试的后台实例。
-
-回调入口在脚本卸载和宿主意外结束后是否仍有效，可独立验证：
-
-```powershell
-.\env\python.exe tests\verify_callback_disconnect.py
-```
-
-该测试只注入和结束自己创建的测试子进程，不操作微信；确认 Frida DLL 已卸载后再次调用原生回调入口，报告写入 `.runtime/crash-analysis/fix-callback-disconnect-verification.json`。它不能代替真实微信长期运行与异步对象清理验证。
-
-开发提交先进入 `developing` 分支，再通过 PR 合并到 `main`。
-
-构建免安装窗口版：
-
-```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-输出为 `dist/WeChatASRBridge-0.2.3-windows-x64-portable.zip` 和 `SHA256SUMS.txt`。构建使用 PyInstaller 文件夹模式，将窗口、API 服务、原生 agent 和 FFmpeg 打包在一起；不会包含微信程序、账号数据或 `.runtime/`。GitHub Actions 的 `Windows portable release` 工作流也可构建并上传 ZIP。
+打包程序包含三个后端、两份原生 agent、FFmpeg、HTML 文档及合成示例音频；不包含微信/输入法程序、认证凭据、个人录音、运行日志或本地素材。构建生成免安装目录、ZIP、第三方许可和 SHA-256 文件。
 
-协议格式参考：[OpenAI 官方 Create transcription 文档](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)。项目代码采用 [MIT](LICENSE) 许可；第三方依赖和微信客户端保留各自的许可证及条款。
+离线测试覆盖模型路由、独立队列、42 并发线程预算、回调隔离、错误释放、配置持久化及 96/120/144/192 DPI 两页窗口布局。离线假后端并发通过不代表真实上游有相同吞吐量。打包程序另有 `--self-test`、`--self-test-lifecycle` 检查运行依赖、托盘、鉴权、服务重启与退出。
+
+仅在要把仓库合成音频发送给相应服务时运行真实验证：
+
+```powershell
+.\env\python.exe tests\verify_unified_live.py
+```
+
+既有微信专项验证仍在 `tests/verify_live.py`、`verify_long.py`、`verify_stability.py`；默认并发假设为单后端微信模式。输入法和豆包协议的背景及历史验证见 [WETYPE.md](docs/WETYPE.md)、[豆包实验记录](experiments/doubao_asr/VERIFICATION.md)。
+
+本轮构建、离线测试和真实请求的验证范围见 [v0.3.0 整合验证记录](docs/UNIFIED_VERIFICATION.md)。
+
+项目与腾讯、微信、字节跳动和 OpenAI 无隶属关系。

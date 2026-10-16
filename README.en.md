@@ -1,68 +1,60 @@
-# WeChat ASR Bridge
+# ASR Bridge
 
-This branch also includes an experimental Windows WeType 3.0.0.34 provider:
-`python server.py --backend wetype --port 8766`, model alias `wetype-voice`.
-See [WeType implementation and limits (Chinese)](docs/WETYPE.md).
+A Windows desktop application and a local OpenAI-compatible audio transcription API for three providers. Audio is sent to the selected provider, not to OpenAI.
 
-An experimental Windows ASR bridge exposing the speech recognition used by Weixin's chat input as a programmable audio transcription API. [中文说明](README.md)
+[中文说明](README.md) · [Portable usage](docs/PORTABLE.md) · [API reference](docs/api.html)
 
-The actual backend is the user's logged-in Weixin client and Weixin's recognition service. Audio is sent through Weixin, **not to OpenAI**. `whisper-1` is a compatibility alias, not an actual Whisper model.
+## Models and requirements
 
-## Portable Windows app
+| model | Provider | Requirements |
+|---|---|---|
+| `wechat-voice` | WeChat desktop | Logged-in WeChat 4.1.13.65 with the verified DLL and native speech capability |
+| `wetype-voice` | WeType | Verified WeType 3.0.0.34 running locally |
+| `doubao-voice` | Doubao web | Normal anonymous visitor initialization and access to its audio service |
+| `whisper-1` | Compatibility alias | Routes to WeChat in the unified service; it is not Whisper |
 
-[Download the portable ZIP from Releases](https://github.com/kuxiaowo/wechat-asr-bridge/releases/latest), extract the entire folder, and run `WeChatASRBridge.exe`. No Python, conda or FFmpeg installation is needed. Log in to the supported Weixin client, start the service, and select an audio file or connect Screenpipe. The app provides status, four concurrent recognition slots, sample audio, result copying/saving, connection settings and logs. The port and API key persist, with the key encrypted using Windows DPAPI for the current user. Closing the window hides it to the system tray and keeps the service running. Use the tray menu to restore the window or exit and gracefully stop services managed by the app.
+No browser credentials are read for Doubao. Native modules are fingerprint-checked before hooks load. Providers need not all be available at startup; failure of one route does not disable others. Client upgrades or private protocol changes may require new adaptations.
 
-See [portable usage](docs/PORTABLE.md). Keep the `_internal` folder alongside the executable. Build from source with `build.ps1`; GitHub Actions can build the same portable artifact.
+## Desktop application
 
-## Source requirements
+Extract the entire `WeChatASRBridge-0.3.0-windows-x64-portable.zip` and run the executable. Keep `_internal` beside it. A local build is written to `dist/`; the latest published GitHub release may precede the source version.
 
-Windows x64, Miniconda/Anaconda, Python 3.11 x64, and a logged-in **Weixin 4.1.13.65** client with iLink and Opus enabled. The loaded DLL must match the SHA-256 documented in the Chinese README. Different builds are rejected before installing native hooks.
+The **Home** tab shows service status, independent concurrency pools, Base URL, model identifiers and a documentation button. Green squares indicate occupied slots. The **Manual transcription** tab provides model selection, file/sample selection and result copying/saving.
 
-## Quick start
+Settings include port, optional local API key and positive concurrency capacities for each provider. There is no fixed 32-slot ceiling or shared default 40-thread bottleneck. Defaults are 4 / 1 / 3, which are initial settings rather than verified upstream limits. Large pools paginate their slot display without reducing actual capacity.
+
+Closing the window hides it to the system tray. Normal exit waits for requests and safe native cleanup, and stops only application-owned services. Settings persist; API keys use current-user Windows DPAPI encryption. Native ownership uncertainty retains the agent instead of unloading a potentially live callback.
+
+## Source and API usage
+
+Use Windows x64 and a Python 3.11 conda environment:
 
 ```powershell
-git clone https://github.com/kuxiaowo/wechat-asr-bridge.git
-cd wechat-asr-bridge
 powershell -NoProfile -ExecutionPolicy Bypass -File .\setup.ps1
-# Log in to Weixin manually.
-.\env\python.exe .\doctor.py
-powershell -NoProfile -ExecutionPolicy Bypass -File .\start.ps1
+.\env\python.exe desktop.py
 ```
 
-In another terminal:
+For an HTTP-only unified service:
 
 ```powershell
-.\env\python.exe .\example_openai.py
+.\env\python.exe server.py --port 8765 --wechat-concurrency 4 --wetype-concurrency 2 --doubao-concurrency 3
 ```
 
-Use `http://127.0.0.1:8765/v1` as the Base URL, `wechat-local` as the default SDK key, and `wechat-voice` or `whisper-1` as the model. Swagger UI is available at `/docs`.
+Use `POST /v1/audio/transcriptions` with multipart `file` and `model`, and optional `response_format=json|text`. OpenAI SDK base URL is `http://127.0.0.1:8765/v1`. An API key placeholder such as `local` is sufficient only when local authentication is disabled. Once enabled, use the configured key.
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8765/v1", api_key="wechat-local", timeout=150)
-with open("audio.mp3", "rb") as audio:
-    print(client.audio.transcriptions.create(model="whisper-1", file=audio).text)
+`GET /v1/models` lists model identifiers, `/health` returns pool status without submitting audio, and `/docs` serves the bundled HTML reference. The desktop can also open the reference offline.
+
+Files are limited to 25 MiB. FFmpeg normalizes complete inputs in memory. Only final JSON/text responses are implemented. `stream=false` and `temperature=0` are compatibility defaults. Unsupported features, including `language`, `prompt`, subtitles and timestamps, return explicit errors.
+
+The service binds to loopback by default. Non-loopback binding requires `WECHAT_API_KEY`. This project contains no vendor executables, account credentials or private recordings.
+
+## Verification and build
+
+```powershell
+.\env\python.exe -m unittest discover -s tests -p "test_*.py" -v
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Optional authentication: set `WECHAT_API_KEY` before starting and use that same key in the client. The default listener is loopback only.
+Offline tests cover independent routing/queues, admission above 40 threads, callback ownership, encrypted settings and native DPI layout. These do not prove equivalent live upstream throughput. The packaged executable also supports `--self-test` and `--self-test-lifecycle`.
 
-For background operation use `start.ps1 -Background`; use `stop.ps1` for graceful shutdown. Both support `-Port`. Runtime logs and control files are kept in the ignored `.runtime/` directory. `-WechatPid` allows selecting a specific main client process.
-
-## Scope
-
-- `POST /v1/audio/transcriptions`, `GET /v1/models`, and `GET /health`.
-- `json` and `text` responses; WAV and MP3 integration-tested. FFmpeg is bundled through the Python dependency.
-- No bridge-level total duration cap; maximum 25 MiB per upload. Synthetic 75.3-second WAV/MP3 inputs have been verified. Opus frames are submitted as numbered packets in one recognition session, with only the last packet marked final. Limits for longer inputs remain unverified.
-- Up to **four concurrent native recognition sessions**; additional requests wait for a free slot. Each request owns its callbacks and cleanup. Use one Uvicorn worker so all requests share the same process-level agent.
-- One persistent Frida agent per Weixin process, with a separate native voice session per request. Shutdown detaches hooks and unloads the agent. Uncertain cleanup pauses requests and retains callbacks until Weixin exits.
-- No streaming, prompts, language controls, subtitles, timestamps, diarization, chat, TTS or Realtime API. Unsupported parameters are rejected explicitly.
-- A health response does not prove live login or recognition readiness.
-- Native instrumentation can affect Weixin stability; this build-specific bridge has not been validated for long-term operation.
-
-Run offline tests with `env\python.exe -m unittest discover -s tests -p "test_*.py" -v`. Live integration uses `env\python.exe tests\verify_live.py` and sends only included synthetic fixtures to Weixin's service.
-
-Run `env\python.exe tests\verify_long.py` to check long WAV/MP3 transcription, including a distinct spoken tail starting after 35 seconds, full decoded duration and native cleanup. See [long-audio findings](docs/LONG_AUDIO.md).
-
-Run `env\python.exe tests\verify_stability.py --port 8765 --requests 20` to verify repeated calls reuse the same agent. Only one server instance may connect to Weixin. `tests\verify_shutdown.py --port 8765` verifies completion of an in-flight request during graceful shutdown and stops that background server.
-
-MIT-licensed bridge code. No proprietary Weixin binaries, account keys, chat databases or personal recordings are distributed. Third-party components keep their own licenses. This project is not affiliated with Tencent, WeChat or OpenAI.
+`tests/verify_unified_live.py` is opt-in and sends only repository-synthesized audio to selected providers. Long-term reliability, arbitrary concurrent load and future client versions remain unverified. The project is unaffiliated with Tencent, ByteDance and OpenAI.

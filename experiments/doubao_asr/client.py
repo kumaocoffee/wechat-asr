@@ -90,9 +90,17 @@ def load_wav(path):
 
 def transcribe(path, *, timeout=15, on_event=None):
     """Send PCM at approximately real-time speed; return only a final result."""
+    pcm, duration = load_wav(path)
+    return transcribe_pcm(pcm, duration=duration, timeout=timeout, on_event=on_event)
+
+
+def transcribe_pcm(pcm, *, duration=None, timeout=15, on_event=None):
+    """Use already normalized PCM16 in memory; never persist an uploaded file."""
     if not 0 < timeout <= 300:
         raise ASRError('超时必须大于 0 且不超过 300 秒')
-    pcm, duration = load_wav(path)
+    if not isinstance(pcm, bytes) or not pcm or len(pcm) % 2:
+        raise ASRError('需要有效的单声道 PCM16 音频')
+    duration = len(pcm) / 32000 if duration is None else duration
     try:
         import websocket
     except ImportError as error:

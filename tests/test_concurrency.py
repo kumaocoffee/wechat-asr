@@ -194,6 +194,9 @@ class BackendConcurrencyTests(unittest.TestCase):
 
 
 class AdmissionTests(unittest.TestCase):
+    def setUp(self):
+        server.configure_backend('wechat')
+
     def test_eight_requests_queue_at_four_slots_without_429(self):
         async def run():
             release = threading.Event()

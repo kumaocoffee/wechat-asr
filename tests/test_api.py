@@ -19,6 +19,7 @@ import server
 
 class ApiContractTests(unittest.TestCase):
     def setUp(self):
+        server.configure_backend('wechat')
         self.client = TestClient(server.app)
         self.audio = Path(__file__).with_name('fixtures').joinpath('test.wav').read_bytes()
 

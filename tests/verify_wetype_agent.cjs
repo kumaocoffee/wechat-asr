@@ -39,11 +39,13 @@ function respond(submission) {
 vm.runInNewContext(fs.readFileSync(path.join(__dirname,'..','wetype_agent.js'),'utf8'),context);
 const agent=context.rpc.exports;
 (async()=>{
- const a=agent.request([1]),b=agent.request([2]);
+ const a=agent.request([1], 'A'),b=agent.request([2], 'B');
  assert.equal(agent.finalize().cleaned,false);
  respond(submissions[0]);
  assert.equal(agent.finalize().cleaned,false,'native callback has not returned');
  advance(250);await a;
+ assert.equal(agent.finalize('A').cleaned,true,'completed owner must not inherit another live request');
+ assert.equal(agent.finalize('B').cleaned,false,'the other owner must retain its live native buffers');
  assert.equal(agent.stats().pending,1,'the second request must retain its own buffers');
  respond(submissions[1]);advance(250);await b;
  assert.equal(agent.finalize().cleaned,true);
